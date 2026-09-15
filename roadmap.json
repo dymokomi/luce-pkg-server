@@ -4,8 +4,12 @@
   "owner_handle": "dymokomi",
   "license": "MIT OR Apache-2.0",
   "milestones": [
-    {"id":"M0", "status":"in_progress", "requires":[], "repositories":["luce-pkg-server"], "evidence":[]},
-    {"id":"M1a", "status":"pending", "requires":["M0"], "repositories":["luce-compress"], "evidence":[]},
+    {"id":"M0", "status":"in_progress", "requires":[], "repositories":["luce-pkg-server"], "evidence":[
+      {"repository":"luce-pkg-server", "commit":"117a70b685cf8b8f63d8d43173f97e37af00bcdc", "ci":"https://github.com/dymokomi/luce-pkg-server/actions/runs/34920804189", "scope":"Public dependency/acceptance tracker and six tracker-validation tests on Linux/macOS. This is not a running server or a completed schema/security contract gate."}
+    ]},
+    {"id":"M1a", "status":"in_progress", "requires":["M0"], "repositories":["luce-compress"], "evidence":[
+      {"repository":"luce-compress", "commit":"1aeee566590e7b3d18182ace2da3629c0d53202b", "ci":"https://github.com/dymokomi/luce-compress/actions/runs/34921226527", "scope":"Native bounded whole-buffer zlib core, consumed-byte reporting, Luce ownership and eight independent workers; 646 oracle/negative cases per compiler mode, all six modes plus ASan/UBSan on Linux/macOS and isolated VPS suite. True incremental streaming/raw framing remain open."}
+    ]},
     {"id":"M1b", "status":"pending", "requires":["M0"], "repositories":["luce-crypto"], "evidence":[]},
     {"id":"M1c", "status":"in_progress", "requires":["M0"], "repositories":["luce-db"], "evidence":[
       {"repository":"luce-db", "commit":"d13a1d1ce1116914e2b63bc9dff99dbde816f345", "ci":"https://github.com/dymokomi/luce-db/actions/runs/34918633116", "scope":"Experimental WAL/AVL, transactions/snapshots, bounded FIFO admission/statistics; Linux/macOS six modes and ASan/UBSan; isolated VPS correctness suite. Checkpoint/migration/restore and deterministic sync faults remain open."}
