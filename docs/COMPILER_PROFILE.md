@@ -113,6 +113,13 @@ Logs are retained under ignored `build/compiler-*-local.log` and
 arguments, TOML dotted-key lookup and missing-directory diagnostic text were corrected
 before this final run; earlier incomplete runs are not counted as full passes.
 
-This checkpoint's dedicated Linux/macOS CI still needs to finish before hosted
-compatibility is claimed. No VPS compiler installation or live-service test is
-part of this local-source profile.
+Source/test revision `2ae259245bc2123ed612b464c2eb1ffdcf82bbc6` also passed the
+[dedicated compiler CI](https://github.com/dymokomi/luce-pkg-server/actions/runs/34932787760)
+on macOS 15 arm64 and Ubuntu 24.04 x86-64. Both retained logs contain all 24
+source-tree build/run pairs, ten negative builds and the successful 70-command
+completion record. Fresh pinned bootstraps and five profile/protocol unit tests
+passed in both jobs. The separate eight-test
+[tracker CI](https://github.com/dymokomi/luce-pkg-server/actions/runs/34932787734)
+also passed on both hosts. These runs verify this exact source revision, not a
+future compiler update or an arbitrary installed toolchain. No VPS compiler
+installation or live-service test is part of this local-source profile.
