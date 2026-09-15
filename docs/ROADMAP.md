@@ -41,6 +41,10 @@ Decided by the owner:
 - Standalone `luc` manages toolchains, projects and packages for both languages;
   planned repository `luce-cli`. This replaces the earlier embedded compiler-CLI
   requirement; see [CLI_DECISION.md](CLI_DECISION.md). Real compile/link acceptance remains.
+- Application signatures are ML-DSA-65; local vaults are Argon2id +
+  XChaCha20-Poly1305. See [APPLICATION_CRYPTO_PROPOSAL.md](APPLICATION_CRYPTO_PROPOSAL.md).
+- v1 manifests remain compiler-compatible `luce.toml`. YAML is not a v1 target.
+  The lockfile filename/encoding is still unfrozen.
 
 Current implementation constraints:
 
@@ -54,14 +58,16 @@ Current implementation constraints:
   remote client's TLS implementation. No insecure fallback or foreign TLS shortcut.
 - No production secrets or public auth listener before security/operational gates.
 - Stock Git is an interoperability client/oracle, not a selected server subprocess.
-- Checkpoints/migrations are not yet available in `luce-db`; its WAL is experimental.
+- `luce-db` WAL remains experimental. Explicit checkpoint/compaction and backup
+  restore exist as tested sub-slices; application schema migrations are next.
 
 Still to design/review, so M0 is not complete:
 
 - Versioned identity/proof/signature/key-role, vault/recovery and challenge/token
-  encodings; exact release/root signature profile and freshness/rotation policy.
-- Existing TOML versus planned YAML migration and shared normalized manifest/lock
-  model. Keep current builds on TOML until language integration is authorized.
+  encodings; exact ML-DSA-65 release/root signature profile and freshness/rotation
+  policy. Algorithm families are chosen; record layouts are not.
+- Lockfile filename/encoding and the shared normalized manifest/lock model on top
+  of retained `luce.toml`.
 - Git format/collision policy and advertised capability/resource limits.
 - Exact proxy/backend trust, headers, framing, certificate policy and deployment
   limits. The existing proxy is Caddy; identifying it is not deployment approval.
@@ -69,6 +75,11 @@ Still to design/review, so M0 is not complete:
   durability limits and safe shutdown. SQL/replication remain later work.
 - Locate the earlier TLS checkpoint before duplicating it; arrange independent
   crypto/storage/protocol review before production use of real credentials.
+
+The [application crypto profile](APPLICATION_CRYPTO_PROPOSAL.md) records the accepted
+ML-DSA-65 and Argon2id + XChaCha20-Poly1305 choices. Encodings, costs and review
+remain open. Isolated-host evidence in this tracker omits host/service identifiers;
+those stay in the private operator workspace notes.
 
 Small primitives with settled format/ownership contracts may be implemented and
 tested while unrelated M0 decisions remain open. Such work is recorded as a
