@@ -1,0 +1,13 @@
+[package]
+name = "profile_wrapper"
+source = "src"
+
+[exports]
+profile_api = "profile_wrapper.api"
+
+[dependencies]
+profile_scalars = "../scalars"
+
+[native]
+sources = ["native inputs/wrapper.c"]
+libraries = ["m"]

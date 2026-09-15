@@ -1,0 +1,13 @@
+## Test-only type/error ownership and native-linking sentinel.
+pub let marker: ErrorCode = ErrorCode.package(73)
+
+pub struct Number:
+    pub let value: i64
+
+extern func profile_scalar_value() -> i64
+
+pub func number() -> Number:
+    return Number(profile_scalar_value())
+
+pub func fail() -> i64!:
+    return error(marker, "profile scalar error")

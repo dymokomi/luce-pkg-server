@@ -1,0 +1,11 @@
+import profile_api as api
+
+let marker: ErrorCode = ErrorCode.package(73)
+
+pub func main(arguments: list[str]) -> int!:
+    assert(arguments.length == 2)
+    assert(arguments[0] == "argument with spaces" and arguments[1] == "; literal dollar$")
+    assert(api.answer() == 42 and api.caught())
+    assert(api.marker != marker)
+    print("PASS compiler profile 42")
+    return 0

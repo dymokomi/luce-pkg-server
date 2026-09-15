@@ -43,3 +43,20 @@ python3 tests/check_roadmap.py
 
 This command checks the tracker, dependency ordering and completion evidence rules,
 including negative tests. It does not execute future product acceptance tests.
+
+An additional [compiler compatibility profile](docs/COMPILER_PROFILE.md) checks
+real Base/Luce imports, transitive native inputs, package/type/error identity,
+argument forwarding and source relocation in all six compiler modes. It provides
+an executable M0 boundary for future `luc` adapters; it is not an installer or a
+completed package journey. It uses only copied synthetic fixtures, without editing
+the language repositories or user projects.
+
+```sh
+python3 tools/bootstrap_compilers.py
+python3 tests/test_compiler_protocols.py
+python3 tests/check_compilers.py
+```
+
+To reuse trusted pinned compiler builds, pass `--base PATH --luce PATH` to the last
+command. Current TOML inputs are compatibility fixtures, not a decision to silently
+migrate project manifests. The manifest/lock and real registry gates remain open.

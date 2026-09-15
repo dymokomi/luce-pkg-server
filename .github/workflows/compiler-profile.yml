@@ -1,0 +1,61 @@
+name: Pinned compiler compatibility (not luc acceptance)
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compiler-profile:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: luce-pkg-server
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Read compiler profile pins
+        id: pins
+        working-directory: luce-pkg-server
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          profile = json.loads(Path('compiler-profiles/pinned-v1.json').read_text())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print('base=' + profile['base_source'], file=output)
+              print('luce=' + profile['luce_source'], file=output)
+          PY
+      - uses: actions/checkout@v4
+        with:
+          repository: dymokomi/luce-base
+          ref: ${{ steps.pins.outputs.base }}
+          path: luce-base
+      - uses: actions/checkout@v4
+        with:
+          repository: dymokomi/luce
+          ref: ${{ steps.pins.outputs.luce }}
+          path: luce
+      - name: Bootstrap without language source changes
+        working-directory: luce-pkg-server
+        run: python3 tools/bootstrap_compilers.py
+      - name: Harness unit tests
+        working-directory: luce-pkg-server
+        run: python3 tests/test_compiler_protocols.py
+      - name: Real imports and linking in all six modes
+        working-directory: luce-pkg-server
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tests/check_compilers.py 2>&1 | tee build/compiler-profile.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compiler-profile-${{ matrix.os }}
+          path: luce-pkg-server/build/compiler-profile.log

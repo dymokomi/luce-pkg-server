@@ -1,0 +1,23 @@
+import profile_values as original
+import profile_alias as alias
+
+pub let marker: ErrorCode = ErrorCode.package(73)
+extern func profile_wrapper_value() -> i64
+
+func accept(value: original.Number) -> i64:
+    return value.value
+
+pub func answer() -> i64:
+    ## Both export names must describe the same nominal Number type.
+    let value = alias.number()
+    return accept(value) + profile_wrapper_value()
+
+pub func core_marker() -> ErrorCode:
+    return original.marker
+
+pub func caught() -> bool:
+    var matched = false
+    let result = original.fail() catch failure:
+        matched = failure.code == original.marker and failure.code != marker
+        recover -1
+    return matched and result == -1
