@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "origin": "https://pkg.luciaos.com",
+  "owner_handle": "dymokomi",
+  "license": "MIT OR Apache-2.0",
+  "milestones": [
+    {"id":"M0", "status":"in_progress", "requires":[], "repositories":["luce-pkg-server"], "evidence":[]},
+    {"id":"M1a", "status":"pending", "requires":["M0"], "repositories":["luce-compress"], "evidence":[]},
+    {"id":"M1b", "status":"pending", "requires":["M0"], "repositories":["luce-crypto"], "evidence":[]},
+    {"id":"M1c", "status":"in_progress", "requires":["M0"], "repositories":["luce-db"], "evidence":[
+      {"repository":"luce-db", "commit":"d13a1d1ce1116914e2b63bc9dff99dbde816f345", "ci":"https://github.com/dymokomi/luce-db/actions/runs/34918633116", "scope":"Experimental WAL/AVL, transactions/snapshots, bounded FIFO admission/statistics; Linux/macOS six modes and ASan/UBSan; isolated VPS correctness suite. Checkpoint/migration/restore and deterministic sync faults remain open."}
+    ]},
+    {"id":"M2a", "status":"pending", "requires":["M1a","M1b","M1c"], "repositories":["luce-git"], "evidence":[]},
+    {"id":"M2b", "status":"pending", "requires":["M1b","M1c"], "repositories":["luce-auth"], "evidence":[]},
+    {"id":"M2c", "status":"pending", "requires":["M0","M1a","M1b"], "repositories":["luce-pkg"], "evidence":[]},
+    {"id":"M3a", "status":"pending", "requires":["M0"], "repositories":["luce-server","luce-http-client"], "evidence":[]},
+    {"id":"M3b", "status":"pending", "requires":["M1b"], "repositories":["luce-tls","luce-http-client"], "evidence":[]},
+    {"id":"M4", "status":"pending", "requires":["M2b","M3a"], "repositories":["luce-auth","luce-pkg-server","luce-cli"], "evidence":[]},
+    {"id":"M5", "status":"pending", "requires":["M2a","M4"], "repositories":["luce-git","luce-pkg-server"], "evidence":[]},
+    {"id":"M6", "status":"pending", "requires":["M2c","M5"], "repositories":["luce-pkg","luce-pkg-server"], "evidence":[]},
+    {"id":"M7", "status":"pending", "requires":["M3b","M6"], "repositories":["luce-cli","luce-pkg","luce","luce-base"], "evidence":[]},
+    {"id":"M8", "status":"pending", "requires":["M3a","M3b","M4","M5","M6","M7"], "repositories":["luce-pkg-server"], "evidence":[]}
+  ],
+  "final_acceptance": [
+    {"id":"owner_registration", "status":"pending", "requires":["M8"], "evidence":[]},
+    {"id":"git_upload_and_release", "status":"pending", "requires":["M8"], "evidence":[]},
+    {"id":"verified_https_download", "status":"pending", "requires":["M8"], "evidence":[]},
+    {"id":"luce_fresh_project", "status":"pending", "requires":["M8"], "evidence":[]},
+    {"id":"luce_base_fresh_project", "status":"pending", "requires":["M8"], "evidence":[]},
+    {"id":"locked_offline_relocated_build", "status":"pending", "requires":["M8"], "evidence":[]},
+    {"id":"negative_security_and_restore", "status":"pending", "requires":["M8"], "evidence":[]}
+  ]
+}
