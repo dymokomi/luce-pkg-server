@@ -13,15 +13,17 @@ roadmap check is not an authentication, storage, cryptography or deployment gate
 1. Register the owner's `dymokomi` account at `https://pkg.luciaos.com` through
    invitation-gated registration, with private credentials kept off GitHub/logs.
 2. Upload Git history and publish immutable, verified source-package releases.
-3. Download those releases with the Luce package client over verified HTTPS.
-4. Use `luce` and `luce-base` package commands in fresh projects; import, link,
+3. Download those releases with the standalone `luc` client over verified HTTPS.
+4. Use `luc` to create/manage projects targeting `luce` and `luce-base`; import, link,
    build and run consumers, then repeat locked/offline and after cache relocation.
 5. Exercise invalid invitations, authorization failures, tampered downloads,
    conflicting versions, interrupted operations, revocation and service restore.
 
 Repository creation, local demos and test accounts alone do not satisfy this goal.
-User-requested language CLI integration remains gated by the language audit freeze
-until explicitly lifted. Deployment configuration and real key custody are reviewed
+The owner selected a separate `luc` product, planned in `luce-cli`, instead of
+requiring embedded compiler package commands. Language sources remain untouched;
+toolchain compatibility and real import/link/build tests remain required. See the
+[client decision](docs/CLI_DECISION.md). Deployment configuration and real key custody are reviewed
 before activation; current VPS testing is isolated and uses disposable test data.
 
 ## Work order

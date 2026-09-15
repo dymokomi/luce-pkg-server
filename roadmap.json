@@ -3,6 +3,13 @@
   "origin": "https://pkg.luciaos.com",
   "owner_handle": "dymokomi",
   "license": "MIT OR Apache-2.0",
+  "client": {
+    "repository": "luce-cli",
+    "executable": "luc",
+    "compiler_commands": ["luce", "luce-base"],
+    "language_source_changes_required": false,
+    "decision": "docs/CLI_DECISION.md"
+  },
   "milestones": [
     {"id":"M0", "status":"in_progress", "requires":[], "repositories":["luce-pkg-server"], "evidence":[
       {"repository":"luce-pkg-server", "commit":"117a70b685cf8b8f63d8d43173f97e37af00bcdc", "ci":"https://github.com/dymokomi/luce-pkg-server/actions/runs/34920804189", "scope":"Public dependency/acceptance tracker and six tracker-validation tests on Linux/macOS. This is not a running server or a completed schema/security contract gate."}
@@ -25,15 +32,15 @@
     {"id":"M4", "status":"pending", "requires":["M2b","M3a"], "repositories":["luce-auth","luce-pkg-server","luce-cli"], "evidence":[]},
     {"id":"M5", "status":"pending", "requires":["M2a","M4"], "repositories":["luce-git","luce-pkg-server"], "evidence":[]},
     {"id":"M6", "status":"pending", "requires":["M2c","M5"], "repositories":["luce-pkg","luce-pkg-server"], "evidence":[]},
-    {"id":"M7", "status":"pending", "requires":["M3b","M6"], "repositories":["luce-cli","luce-pkg","luce","luce-base"], "evidence":[]},
+    {"id":"M7", "status":"pending", "requires":["M3b","M6"], "repositories":["luce-cli","luce-pkg"], "toolchains":["luce","luce-base"], "evidence":[]},
     {"id":"M8", "status":"pending", "requires":["M3a","M3b","M4","M5","M6","M7"], "repositories":["luce-pkg-server"], "evidence":[]}
   ],
   "final_acceptance": [
     {"id":"owner_registration", "status":"pending", "requires":["M8"], "evidence":[]},
     {"id":"git_upload_and_release", "status":"pending", "requires":["M8"], "evidence":[]},
     {"id":"verified_https_download", "status":"pending", "requires":["M8"], "evidence":[]},
-    {"id":"luce_fresh_project", "status":"pending", "requires":["M8"], "evidence":[]},
-    {"id":"luce_base_fresh_project", "status":"pending", "requires":["M8"], "evidence":[]},
+    {"id":"luce_fresh_project", "status":"pending", "requires":["M8"], "client":"luc", "language":"luce", "evidence":[]},
+    {"id":"luce_base_fresh_project", "status":"pending", "requires":["M8"], "client":"luc", "language":"luce-base", "evidence":[]},
     {"id":"locked_offline_relocated_build", "status":"pending", "requires":["M8"], "evidence":[]},
     {"id":"negative_security_and_restore", "status":"pending", "requires":["M8"], "evidence":[]}
   ]

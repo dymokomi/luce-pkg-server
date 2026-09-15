@@ -20,7 +20,7 @@ are not hidden production implementations. External Git and SQLite remain unsele
 | M4 | Invited account API / operator CLI | Registration proof + one-use invite, concurrent duplicate/expired/revoked claims, scoped tokens and redacted logs |
 | M5 | Git hosting | Standard HTTPS clone/fetch/push, ACL/ref/object isolation, aborted/concurrent pushes and bounded resource use |
 | M6 | Signed package releases | Authorized release-from-commit, immutable versions, tamper/replay/rollback rejection and DB/object consistency |
-| M7 | Remote CLI and language integration | Fresh install/import/link/build in both languages, frozen/offline/relocated builds and migration; language audit freeze lifted |
+| M7 | Standalone `luc` client and toolchain integration | Project/toolchain management, fresh install/import/link/build with both compiler executables, locked/offline/relocated builds; no language-source changes required |
 | M8 | Operational acceptance | Independent reviews, upgrade/rollback, backup/restore, key custody/rotation, quotas/monitoring, then approved domain activation |
 
 Follow the prerequisites in `roadmap.json`, not repository creation order. Never
@@ -38,13 +38,16 @@ Decided by the owner:
 - Ordinary HTTP backend behind existing HTTPS termination; no custom Git transport
   helper or strict post-quantum transport requirement for this first deployment.
 - Invitation-gated accounts. Final owner handle `dymokomi`; secrets are not public.
-- Package commands must eventually be available from the real language CLIs.
+- Standalone `luc` manages toolchains, projects and packages for both languages;
+  planned repository `luce-cli`. This replaces the earlier embedded compiler-CLI
+  requirement; see [CLI_DECISION.md](CLI_DECISION.md). Real compile/link acceptance remains.
 
 Current implementation constraints:
 
 - Pin supported toolchains; initially validate macOS arm64 and Linux x86-64 in all
   four native optimization modes and both C comparison modes. No Windows claim
-  without a Windows gate. Do not modify either language during the existing audit.
+  without a Windows gate. Do not modify either language during the existing audit
+  and standard-library linking work. Test versioned compiler adapters in `luc`.
 - Native worker state may cross threads only under its ownership contract; Luce
   managed references stay worker-local. No unbounded per-request threads.
 - Public clients require verified HTTPS. The external proxy does not provide the

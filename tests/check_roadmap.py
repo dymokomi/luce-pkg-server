@@ -23,11 +23,20 @@ def validate(data):
     require(data["origin"] == "https://pkg.luciaos.com", "canonical HTTPS origin changed")
     require(data["owner_handle"] == "dymokomi", "owner acceptance target changed")
     require(data["license"] == "MIT OR Apache-2.0", "license changed")
+    require(data["client"] == {"repository": "luce-cli", "executable": "luc",
+                              "compiler_commands": ["luce", "luce-base"],
+                              "language_source_changes_required": False,
+                              "decision": "docs/CLI_DECISION.md"}, "standalone client contract changed")
     rows = data["milestones"] + data["final_acceptance"]
     by_id = {row["id"]: row for row in rows}
     require(len(by_id) == len(rows), "duplicate milestone")
     require({row["id"] for row in data["milestones"]} == MILESTONES, "missing/unknown milestone")
     require({row["id"] for row in data["final_acceptance"]} == ACCEPTANCE, "missing acceptance test")
+    require(by_id["M7"]["repositories"] == ["luce-cli", "luce-pkg"] and
+            by_id["M7"]["toolchains"] == ["luce", "luce-base"], "client implementation/toolchain boundary changed")
+    for identifier, language in [("luce_fresh_project", "luce"), ("luce_base_fresh_project", "luce-base")]:
+        require(by_id[identifier].get("client") == "luc" and by_id[identifier].get("language") == language,
+                "standalone client must exercise both languages")
     visited, active = set(), set()
 
     def visit(identifier):
@@ -106,6 +115,21 @@ class TrackerTests(unittest.TestCase):
         self.data["milestones"][3]["evidence"][0]["ci"] = "https://example.com/1"
         with self.assertRaisesRegex(ValueError, "CI link"):
             validate(self.data)
+
+    def test_refuses_embedded_cli_or_language_edit_requirement(self):
+        for field, value in [("executable", "luce"), ("language_source_changes_required", True)]:
+            candidate = copy.deepcopy(self.data)
+            candidate["client"][field] = value
+            with self.assertRaisesRegex(ValueError, "standalone client"):
+                validate(candidate)
+
+    def test_both_languages_require_real_luc_acceptance(self):
+        for identifier in ["luce_fresh_project", "luce_base_fresh_project"]:
+            candidate = copy.deepcopy(self.data)
+            row = next(item for item in candidate["final_acceptance"] if item["id"] == identifier)
+            row["client"] = "mock"
+            with self.assertRaisesRegex(ValueError, "both languages"):
+                validate(candidate)
 
 
 if __name__ == "__main__":
