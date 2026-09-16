@@ -40,11 +40,15 @@ vault/account formats interchangeable.
    exact FIPS encodings, key generation/sign/verify, entropy failure handling,
    official and independent vectors, malformed encodings and generated-code review.
    Recheck FIPS 204's published errata before coding; the current NIST landing
-   page points to a July 31, 2026 potential-updates list.
+   page points to a July 31, 2026 potential-updates list. Experimental SHAKE128/256
+   and ML-DSA-65 keygen/sign/verify now exist in `luce-crypto`; they are not
+   reviewed or approved for real credentials.
 2. XChaCha20-Poly1305 needs native ChaCha20/HChaCha20/Poly1305, exact AEAD framing,
    nonce/counter/size bounds and verify-before-release decryption. Tests must reject
    altered ciphertext/tag/nonce/associated data without exposing unauthenticated
    plaintext, and cover allocation/entropy/cancellation/ownership failures.
+   Experimental IETF ChaCha20-Poly1305 and XChaCha20-Poly1305 now exist in
+   `luce-crypto`.
 3. `luce-auth` still needs separately versioned vault, key, proof, challenge,
    invite and token records. Authenticate vault format/cost/key-role metadata;
    generate identity keys randomly and rewrap them on password change. Freeze

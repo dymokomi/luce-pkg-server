@@ -59,18 +59,21 @@ Current implementation constraints:
   remote client's TLS implementation. No insecure fallback or foreign TLS shortcut.
 - No production secrets or public auth listener before security/operational gates.
 - Stock Git is an interoperability client/oracle, not a selected server subprocess.
-- `luce-db` WAL remains experimental. Explicit checkpoint/compaction and backup
-  restore exist as tested sub-slices; application schema migrations are next.
+- `luce-db` WAL remains experimental. Explicit checkpoint/compaction, backup
+  restore, application schema migrations and process-RSS measurements exist as
+  tested sub-slices.
 
 Still to design/review, so M0 is not complete:
 
 - Versioned identity/proof/signature/key-role, vault/recovery and challenge/token
-  encodings; exact ML-DSA-65 release/root signature profile and freshness/rotation
-  policy. Algorithm families are chosen; record layouts are not.
-- Shared normalized lock contents on top of frozen `luce.lock` TOML. Record
-  layouts for invites/vaults/tokens exist in [CONTRACTS.md](CONTRACTS.md);
-  `luce-auth` still has to implement them.
-- Git format/collision policy and advertised capability/resource limits.
+  encodings beyond the LID1 invite/vault wrap; exact ML-DSA-65 release/root
+  signature profile (`LRS1`) and freshness/rotation policy. Algorithm families
+  and LID1 header layouts are chosen; remaining record kinds are not all implemented.
+- Shared normalized lock contents on top of frozen `luce.lock` TOML. First-slice
+  `luce-pkg` encodes origin/name/version/digest/compiler; hostile-input and
+  archive/cache work remain.
+- Git packs/refs/Smart HTTP, SHAttered-prefix rejection in the object store, and
+  advertised capability/resource limits. Blob SHA-1 object IDs exist.
 - Exact proxy/backend trust, headers, framing, certificate policy and deployment
   limits. The existing proxy is Caddy; identifying it is not deployment approval.
 - Native storage checkpoint/replacement/migration/recovery contract, memory budgets,
