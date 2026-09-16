@@ -44,7 +44,8 @@ Decided by the owner:
 - Application signatures are ML-DSA-65; local vaults are Argon2id +
   XChaCha20-Poly1305. See [APPLICATION_CRYPTO_PROPOSAL.md](APPLICATION_CRYPTO_PROPOSAL.md).
 - v1 manifests remain compiler-compatible `luce.toml`. YAML is not a v1 target.
-  The lockfile filename/encoding is still unfrozen.
+  The lockfile is `luce.lock` (TOML, schema_version = 1). Compilers do not read it.
+  See [CONTRACTS.md](CONTRACTS.md).
 
 Current implementation constraints:
 
@@ -66,8 +67,9 @@ Still to design/review, so M0 is not complete:
 - Versioned identity/proof/signature/key-role, vault/recovery and challenge/token
   encodings; exact ML-DSA-65 release/root signature profile and freshness/rotation
   policy. Algorithm families are chosen; record layouts are not.
-- Lockfile filename/encoding and the shared normalized manifest/lock model on top
-  of retained `luce.toml`.
+- Shared normalized lock contents on top of frozen `luce.lock` TOML. Record
+  layouts for invites/vaults/tokens exist in [CONTRACTS.md](CONTRACTS.md);
+  `luce-auth` still has to implement them.
 - Git format/collision policy and advertised capability/resource limits.
 - Exact proxy/backend trust, headers, framing, certificate policy and deployment
   limits. The existing proxy is Caddy; identifying it is not deployment approval.
