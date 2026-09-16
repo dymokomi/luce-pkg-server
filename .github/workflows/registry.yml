@@ -1,0 +1,74 @@
+name: Loopback registry API
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  registry:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: luce-pkg-server
+      - name: Read pins
+        id: pins
+        working-directory: luce-pkg-server
+        run: |
+          python3 - <<'PY'
+          import json, os
+          from pathlib import Path
+          profile = json.loads(Path('compiler-profiles/pinned-v1.json').read_text())
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              print('base=' + profile['base_source'], file=output)
+              print('luce=' + profile['luce_source'], file=output)
+          PY
+          echo "server=$(tr -d '\n' < bootstrap/SERVER)" >> "$GITHUB_OUTPUT"
+          echo "db=$(tr -d '\n' < bootstrap/DB)" >> "$GITHUB_OUTPUT"
+          echo "auth=$(tr -d '\n' < bootstrap/AUTH)" >> "$GITHUB_OUTPUT"
+          echo "crypto=$(tr -d '\n' < bootstrap/CRYPTO)" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@v4
+        with:
+          repository: dymokomi/luce-base
+          ref: ${{ steps.pins.outputs.base }}
+          path: luce-base
+      - uses: actions/checkout@v4
+        with:
+          repository: dymokomi/luce
+          ref: ${{ steps.pins.outputs.luce }}
+          path: luce
+      - uses: actions/checkout@v4
+        with:
+          repository: dymokomi/luce-server
+          ref: ${{ steps.pins.outputs.server }}
+          path: luce-server
+      - uses: actions/checkout@v4
+        with:
+          repository: dymokomi/luce-db
+          ref: ${{ steps.pins.outputs.db }}
+          path: luce-db
+      - uses: actions/checkout@v4
+        with:
+          repository: dymokomi/luce-auth
+          ref: ${{ steps.pins.outputs.auth }}
+          path: luce-auth
+      - uses: actions/checkout@v4
+        with:
+          repository: dymokomi/luce-crypto
+          ref: ${{ steps.pins.outputs.crypto }}
+          path: luce-crypto
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Bootstrap without language source changes
+        working-directory: luce-pkg-server
+        run: python3 tools/bootstrap_compilers.py
+      - name: Registry API in all six modes
+        working-directory: luce-pkg-server
+        run: python3 tests/run_registry.py

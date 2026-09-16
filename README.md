@@ -5,8 +5,12 @@ MIT OR Apache-2.0. Application composition will be Luce; database, authenticatio
 cryptography, Git and package internals will be Luce Base. The HTTP backend will
 sit behind the existing VPS HTTPS proxy.
 
-**No registry server is implemented or deployed by this repository yet.** A green
-roadmap check is not an authentication, storage, cryptography or deployment gate.
+A loopback invited-account HTTP API now exists as a first slice: `/health`,
+`/v1/identity` (X-Forwarded-For is never identity; Authorization and
+Git-Protocol are preserved) and single-use `/v1/invites/redeem` on `luce-db`.
+It binds `127.0.0.1` only. This is not `pkg.luciaos.com`, Git hosting, signed
+releases or real credentials. A green roadmap check is not an authentication,
+storage, cryptography or deployment gate.
 
 ## End-to-end goal
 

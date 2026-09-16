@@ -1,0 +1,11 @@
+[package]
+name = "luce_pkg_server"
+source = "src"
+
+[exports]
+registry = "luce_pkg_server.registry"
+
+[dependencies]
+luce_server = "../luce-server"
+luce_db = "../luce-db"
+luce_auth = "../luce-auth"
