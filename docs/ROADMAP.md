@@ -75,7 +75,11 @@ Still to design/review, so M0 is not complete:
 - Git packs/refs/Smart HTTP, SHAttered-prefix rejection in the object store, and
   advertised capability/resource limits. Blob SHA-1 object IDs exist.
 - Exact proxy/backend trust, headers, framing, certificate policy and deployment
-  limits. The existing proxy is Caddy; identifying it is not deployment approval.
+  limits. Loopback invited-account HTTP now exists; public `pkg.luciaos.com` does
+  not. The existing proxy is Caddy; identifying it is not deployment approval.
+- Native TLS handshake, X.509 path building and verified HTTPS. HKDF-Expand-Label,
+  record headers and DNS-ID matching exist in `luce-tls`; the HTTP client is
+  still cleartext.
 - Native storage checkpoint/replacement/migration/recovery contract, memory budgets,
   durability limits and safe shutdown. SQL/replication remain later work.
 - Locate the earlier TLS checkpoint before duplicating it; arrange independent
