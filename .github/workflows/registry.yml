@@ -58,6 +58,8 @@ jobs:
           python3 tests/run_repositories.py --mode sanitize 2>&1 | tee build/repositories-sanitize-ci.log
           python3 tests/run_repositories.py --fixture refs 2>&1 | tee build/refs-ci.log
           python3 tests/run_repositories.py --fixture refs --mode sanitize 2>&1 | tee build/refs-sanitize-ci.log
+          python3 tests/run_repositories.py --fixture large_objects 2>&1 | tee build/large-objects-ci.log
+          python3 tests/run_repositories.py --fixture large_objects --mode sanitize 2>&1 | tee build/large-objects-sanitize-ci.log
       - name: Repository native heap cleanup
         if: runner.os == 'macOS'
         working-directory: luce-pkg-server
@@ -66,6 +68,7 @@ jobs:
           set -o pipefail
           python3 tests/run_repositories.py --mode native0 --heap 2>&1 | tee build/repositories-heap-ci.log
           python3 tests/run_repositories.py --fixture refs --mode native0 --heap 2>&1 | tee build/refs-heap-ci.log
+          python3 tests/run_repositories.py --fixture large_objects --mode native0 --heap 2>&1 | tee build/large-objects-heap-ci.log
       - name: Heap-tool process lifecycle regression
         if: always()
         working-directory: luce-pkg-server
@@ -83,3 +86,6 @@ jobs:
             luce-pkg-server/build/refs-ci.log
             luce-pkg-server/build/refs-sanitize-ci.log
             luce-pkg-server/build/refs-heap-ci.log
+            luce-pkg-server/build/large-objects-ci.log
+            luce-pkg-server/build/large-objects-sanitize-ci.log
+            luce-pkg-server/build/large-objects-heap-ci.log

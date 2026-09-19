@@ -31,12 +31,22 @@ must already have an account. Package names are lowercase ASCII letters/digits,
 underscores or hyphens (1–64 bytes, first character alphanumeric); lossless hex
 storage keys avoid Prism path restrictions and name aliases.
 
-Objects are canonical uncompressed Git envelopes, limited to 1 MiB each. Exact
+Objects are canonical uncompressed Git envelopes, limited to 64 MiB each. Exact
 duplicates are idempotent, differing bytes at the same ID conflict, and reads
 recheck framing and Git identity. Successful writes include the database bake
 barrier; an error can still mean a commit happened before its barrier failed.
 Callers must reconcile ambiguous outcomes, not assume rollback. Returned Prism
-values are owned and must be released. Only repository creation is exposed over
+values are owned and must be released. Objects up to 1 MiB retain the original
+inline format. Larger objects use immutable 1 MiB chunks under a SHA-256 content
+key; each chunk is a bounded transaction/IPC value. After staging and a bake
+barrier, one small manifest transaction publishes the object. Incomplete staging
+is invisible to object reads and is resumable after restart. Reconstruction
+checks manifest bounds, exact chunk lengths, SHA-256 content and Git identity.
+Reads still assemble the entire object in bounded memory; this is not a streaming
+API. Interrupted/conflicting uploads can leave orphan chunks, and quotas, garbage
+collection and disk-exhaustion policy are not implemented. The content checksum
+is not publisher authentication or comprehensive SHA-1 collision-attack detection.
+Only repository creation is exposed over
 HTTP; object reads/writes remain internal APIs.
 This is **not** SHA-1 collision-attack protection, commit/tree semantic validation,
 graph reachability, Git push/pull, publisher authorization or signed releases.
@@ -47,11 +57,19 @@ Git history. Storage corruption tests deliberately modify disposable raw DB data
 python3 tools/bootstrap_registry.py
 python3 tests/run_repositories.py
 python3 tests/run_repositories.py --mode sanitize
+python3 tests/run_repositories.py --fixture large_objects
+python3 tests/run_repositories.py --fixture large_objects --mode sanitize
 ```
 
 These tests cover fresh-process reopen, local/IPC reads and writes, concurrent
 duplicate creation through worker-local clients, ownership rejection, exact 1 MiB
 binary objects, name/path boundaries, idempotence and persisted-content tampering.
+Large-object tests use an actual tracked Luce Base bootstrap source, a 17 MiB
+object exceeding Prism's 16 MiB IPC frame limit, and the full 64 MiB object bound.
+They also exercise inline/chunk split boundaries, independent-process reopen,
+interrupted staging/restart/resume and corrupted chunks/manifests. Public HTTP
+object transfer and client response limits still need integration before these
+tests can count as real remote-package acceptance.
 
 Internal `update_refs` performs an atomic compare-and-swap batch of up to 64
 `RefUpdate` records (`name`, 20-byte `expected`, 20-byte `target`). Zero expected

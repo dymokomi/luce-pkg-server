@@ -20,13 +20,13 @@ func boundaries(database: db.Database*, write: bool) -> !:
     var name: u8[64]
     for i in 0..<(usize)64: name[i] = 'a'
     if write: try repositories.create(database, "alice", (str)name)
-    let payload = try alloc u8[repositories.max_object_bytes - 13] in memory.heap
+    let payload = try alloc u8[repositories.chunk_bytes - 13] in memory.heap
     defer free(payload) in memory.heap
     for i in 0..<payload.length: payload[i] = (u8)(i % 256)
-    let wire = try alloc u8[repositories.max_object_bytes] in memory.heap
+    let wire = try alloc u8[repositories.chunk_bytes] in memory.heap
     defer free(wire) in memory.heap
     let count = try git.encode_object("blob", payload, wire)
-    assert(count == repositories.max_object_bytes)
+    assert(count == repositories.chunk_bytes)
     var id: u8[20]
     discard(try git.hash_blob(payload, id))
     if write:

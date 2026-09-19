@@ -5,8 +5,11 @@ import prism
 import interop
 import git
 import strings
+import crypto_native
+import memory
 
-pub let max_object_bytes: usize = 1048576
+pub let max_object_bytes: usize = 67108864
+pub let chunk_bytes: usize = 1048576
 
 func valid_owner(value: str) -> bool:
     if value.length == 0 or value.length > 32: return false
@@ -97,6 +100,109 @@ func object_path(path: str, id: const u8[], output: u8[]) -> str!:
     discard(try git.hex_id(id, encoded_id))
     return try join([path, "/objects/", (str)encoded_id], output)
 
+func content_key(wire: const u8[], output: u8[]) -> !:
+    var digest: u8[32]
+    discard(try crypto_native.digest(wire, digest))
+    let digits = b"0123456789abcdef"
+    for i in 0..<(usize)32:
+        output[i * 2] = digits[(usize)(digest[i] >> 4)]
+        output[i * 2 + 1] = digits[(usize)(digest[i] & 15)]
+
+func put_chunk(database: db.Database*, group: str, label: str, bytes: const u8[]) -> !:
+    let tx = try database.begin()
+    defer tx.release()
+    let existing = tx.value().get(group, label) catch failure:
+        if failure.code != prism.missing: error(failure.code, failure.message)
+        let value = try prism.Value.array(prism.DType.uint8, [(i64)bytes.length], bytes)
+        defer value.release()
+        try tx.value().set(group, label, value)
+        discard(try tx.value().commit(wait_ms = 1000))
+        return
+    defer existing.release()
+    if not same(existing.value().bytes(), bytes): error(prism.conflict, "object chunk collision or corruption")
+
+## Staging is resumable and is not an advertised object. The object manifest is
+## committed only after all immutable chunks and a durability barrier succeed.
+## Failed uploads can leave orphan chunks; quotas/collection remain future work.
+func stage_chunks(database: db.Database*, path: str, wire: const u8[], key: u8[]) -> !:
+    try content_key(wire, key)
+    var root_buffer: u8[208]
+    let root = try join([path, "/chunks"], root_buffer)
+    var group_buffer: u8[288]
+    let group = try join([root, "/", (str)key], group_buffer)
+    let tx = try database.begin()
+    defer tx.release()
+    if not try tx.value().contains(group):
+        if not try tx.value().contains(root): try tx.value().add(root, "directory")
+        try tx.value().add(group, "object-chunks")
+        discard(try tx.value().commit(wait_ms = 1000))
+    # Close this snapshot before accumulating chunks, allowing Prism to reclaim
+    # old generations while the separate chunk transactions progress.
+    tx.value().close()
+    var at: usize = 0
+    var index: usize = 0
+    while at < wire.length:
+        let remaining = wire.length - at
+        let count = chunk_bytes if remaining > chunk_bytes else remaining
+        var label_buffer: u8[16]
+        let label = try format(label_buffer, f"c{index}")
+        try put_chunk(database, group, label, wire[at..<at + count])
+        at += count
+        index += 1
+    discard(try database.bake(wait_ms = 1000))
+
+func load_chunks(session: prism.Session*, path: str, location: str) -> interop.Reference[prism.Value]!:
+    let format_value = try session.get(location, "format")
+    defer format_value.release()
+    if try format_value.value().text_at() != "chunks-v1": error(prism.invalid, "unknown object storage format")
+    let key_value = try session.get(location, "chunks")
+    defer key_value.release()
+    let key = try key_value.value().text_at()
+    if key.length != 64: error(prism.invalid, "invalid object chunk key")
+    for byte in key.bytes:
+        if not ((byte >= '0' and byte <= '9') or (byte >= 'a' and byte <= 'f')): error(prism.invalid, "invalid object chunk key")
+    let size_value = try session.get(location, "size")
+    defer size_value.release()
+    let size = try size_value.value().integer_at()
+    if size <= (i64)chunk_bytes or size > (i64)max_object_bytes: error(prism.invalid, "invalid chunked object size")
+    var group_buffer: u8[288]
+    let group = try join([path, "/chunks/", key], group_buffer)
+    let wire = try alloc u8[(usize)size] in memory.heap
+    defer free(wire) in memory.heap
+    var at: usize = 0
+    var index: usize = 0
+    while at < wire.length:
+        let remaining = wire.length - at
+        let count = chunk_bytes if remaining > chunk_bytes else remaining
+        var label_buffer: u8[16]
+        let label = try format(label_buffer, f"c{index}")
+        let chunk = try session.get(group, label)
+        defer chunk.release()
+        let bytes = chunk.value().bytes()
+        if bytes.length != count: error(prism.invalid, "invalid stored chunk length")
+        for i in 0..<count: wire[at + i] = bytes[i]
+        at += count
+        index += 1
+    var actual_key: u8[64]
+    try content_key(wire, actual_key)
+    if (str)actual_key != key: error(prism.invalid, "object chunk digest mismatch")
+    return try prism.Value.array(prism.DType.uint8, [size], wire)
+
+func load_wire(session: prism.Session*, path: str, location: str) -> interop.Reference[prism.Value]!:
+    return session.get(location, "wire") catch failure:
+        if failure.code != prism.missing: error(failure.code, failure.message)
+        return try load_chunks(session, path, location)
+
+func existing_object(database: db.Database*, path: str, location: str, principal: str, wire: const u8[]) -> bool!:
+    let snapshot = try database.snapshot()
+    defer snapshot.release()
+    try require_owner(snapshot.value(), path, principal)
+    if not try snapshot.value().contains(location): return false
+    let existing = try load_wire(snapshot.value(), path, location)
+    defer existing.release()
+    if not same(existing.value().bytes(), wire): error(prism.conflict, "Git object identity collision")
+    return true
+
 ## Store one canonical uncompressed loose-object envelope. Content-addressed,
 ## idempotent only for byte-identical content. Writes id only after success.
 ## SHA-1 is Git identity, NOT collision-attack detection or release authenticity.
@@ -110,18 +216,35 @@ pub func put_object(database: db.Database*, principal: str, owner: str, name: st
     discard(try git.hash_object(object.kind, object.payload, digest))
     var object_buffer: u8[256]
     let location = try object_path(path, digest, object_buffer)
+    if try existing_object(database, path, location, principal, wire):
+        discard(try database.bake(wait_ms = 1000))
+        for i in 0..<(usize)20: id[i] = digest[i]
+        return
+    var key: u8[64]
+    if wire.length > chunk_bytes: try stage_chunks(database, path, wire, key)
     let tx = try database.begin()
     defer tx.release()
     try require_owner(tx.value(), path, principal)
     if try tx.value().contains(location):
-        let existing = try tx.value().get(location, "wire")
+        let existing = try load_wire(tx.value(), path, location)
         defer existing.release()
         if not same(existing.value().bytes(), wire): error(prism.conflict, "Git object identity collision")
     else:
-        let value = try prism.Value.array(prism.DType.uint8, [(i64)wire.length], wire)
-        defer value.release()
         try tx.value().add(location, "git-object")
-        try tx.value().set(location, "wire", value)
+        if wire.length <= chunk_bytes:
+            let value = try prism.Value.array(prism.DType.uint8, [(i64)wire.length], wire)
+            defer value.release()
+            try tx.value().set(location, "wire", value)
+        else:
+            let version = try prism.Value.text("chunks-v1")
+            defer version.release()
+            let size = try prism.Value.integer((i64)wire.length)
+            defer size.release()
+            let chunks = try prism.Value.text((str)key)
+            defer chunks.release()
+            try tx.value().set(location, "format", version)
+            try tx.value().set(location, "size", size)
+            try tx.value().set(location, "chunks", chunks)
         discard(try tx.value().commit(wait_ms = 1000))
     # Also bake idempotent retries: a previous commit may have succeeded before
     # its bake failed. Never report success without a completed durability barrier.
@@ -141,7 +264,7 @@ pub func get_object(database: db.Database*, principal: str, owner: str, name: st
 func checked_object(session: prism.Session*, path: str, id: const u8[]) -> interop.Reference[prism.Value]!:
     var object_buffer: u8[256]
     let location = try object_path(path, id, object_buffer)
-    let value = try session.get(location, "wire")
+    let value = try load_wire(session, path, location)
     errdefer value.release()
     let wire = value.value().bytes()
     if wire.length > max_object_bytes: error(prism.invalid, "stored Git object exceeds limit")

@@ -17,7 +17,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base', type=Path, default=ROOT / 'build/toolchain/luce-base')
     parser.add_argument('--mode', choices=[*MODES, 'all', 'sanitize'], default='all')
-    parser.add_argument('--fixture', choices=['repositories', 'refs'], default='repositories')
+    parser.add_argument('--fixture', choices=['repositories', 'refs', 'large_objects'], default='repositories')
     parser.add_argument('--heap', action='store_true', help='also require zero macOS leaks on separate stores')
     args = parser.parse_args()
     if args.heap and sys.platform != 'darwin':
@@ -35,10 +35,11 @@ def main():
     def fixture(binary, store, phase):
         # leaks reports its own exit, not the child's. Check the real fixture
         # separately, then require completion AND zero leaks on an isolated store.
-        run([binary, store, phase])
+        extra = [ROOT.parent / 'luce-base/bootstrap/luce-base-arm64-macos.c'] if args.fixture == 'large_objects' else []
+        run([binary, store, phase, *extra])
         if args.heap:
             result = heap_process.run(['/usr/bin/leaks', '--quiet', '--noContent', '--atExit', '--',
-                                     str(binary), str(store) + '-heap', phase],
+                                     str(binary), str(store) + '-heap', phase, *extra],
                                     cwd=ROOT, env=env, timeout=180)
             print(result.stdout, end='', flush=True)
             print(result.stderr, end='', file=sys.stderr, flush=True)
@@ -67,9 +68,14 @@ def main():
             fixture(binary, store, 'read')
             fixture(binary, Path(temporary) / 'ipc', 'ipc')
             fixture(binary, Path(temporary) / 'ipc', 'read')
-            for attempt in range(4):
-                fixture(binary, Path(temporary) / f'race-{attempt}', 'race')
-            if args.fixture == 'refs':
+            if args.fixture == 'large_objects':
+                fixture(binary, Path(temporary) / 'faults', 'faults')
+                fixture(binary, Path(temporary) / 'interrupted', 'stage')
+                fixture(binary, Path(temporary) / 'interrupted', 'resume')
+            else:
+                for attempt in range(4):
+                    fixture(binary, Path(temporary) / f'race-{attempt}', 'race')
+            if args.fixture in ('refs', 'large_objects'):
                 fixture(binary, Path(temporary) / 'limits', 'limits')
         print(f'PASS repository mode {name}', flush=True)
 

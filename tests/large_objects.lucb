@@ -1,0 +1,180 @@
+import repositories
+import db
+import auth
+import prism
+import git
+import crypto_native
+import files
+import memory
+import c
+
+func roundtrip(database: db.Database*, payload: const u8[], write: bool) -> !:
+    let wire = try alloc u8[payload.length + 32] in memory.heap
+    defer free(wire) in memory.heap
+    let n = try git.encode_object("blob", payload, wire)
+    var expected: u8[20]
+    discard(try git.hash_blob(payload, expected))
+    if write:
+        var id: u8[20]
+        try repositories.put_object(database, "alice", "alice", "large", wire[..<n], id)
+        for i in 0..<(usize)20: assert(id[i] == expected[i])
+        let before = try database.snapshot()
+        defer before.release()
+        try repositories.put_object(database, "alice", "alice", "large", wire[..<n], id)
+        let after = try database.snapshot()
+        defer after.release()
+        assert(try before.value().revision() == try after.value().revision())
+    let loaded = try repositories.get_object(database, "alice", "alice", "large", expected)
+    defer loaded.release()
+    let actual = loaded.value().bytes()
+    assert(actual.length == n)
+    for i in 0..<n: assert(actual[i] == wire[i])
+
+func data_cases(database: db.Database*, bootstrap: c.str, write: bool) -> !:
+    let actual_source = try files.read_limit(bootstrap, 33554432)
+    defer free(actual_source) in memory.heap
+    assert(actual_source.length > repositories.chunk_bytes)
+    try roundtrip(database, actual_source, write)
+    # Cross the IPC/journal 16 MiB frame limit, not merely the former1MiB cap.
+    let payload = try alloc u8[17825792] in memory.heap
+    defer free(payload) in memory.heap
+    for i in 0..<payload.length: payload[i] = (u8)(i % 251)
+    try roundtrip(database, payload, write)
+    # Both sides of the first chunk split, including a one-byte final chunk.
+    try roundtrip(database, payload[..<1048564], write)
+    try roundtrip(database, payload[..<1048563], write)
+
+func limits(database: db.Database*) -> !:
+    let payload = try alloc u8[repositories.max_object_bytes - 14] in memory.heap
+    defer free(payload) in memory.heap
+    for i in 0..<payload.length: payload[i] = (u8)(i % 253)
+    try roundtrip(database, payload, true)
+    let too_large = try alloc u8[repositories.max_object_bytes + 1] in memory.heap
+    defer free(too_large) in memory.heap
+    var id: u8[20]
+    for i in 0..<(usize)20: id[i] = 0x55
+    var rejected = false
+    repositories.put_object(database, "alice", "alice", "large", too_large, id) catch failure:
+        assert(failure.code == prism.invalid)
+        rejected = true
+    assert(rejected)
+    for byte in id: assert(byte == 0x55)
+
+func expect_missing(database: db.Database*, id: const u8[]) -> !:
+    let value = repositories.get_object(database, "alice", "alice", "large", id) catch failure:
+        assert(failure.code == prism.missing)
+        return
+    value.release()
+    assert(false)
+
+func expect_invalid(database: db.Database*, id: const u8[]) -> !:
+    let value = repositories.get_object(database, "alice", "alice", "large", id) catch failure:
+        assert(failure.code == prism.invalid)
+        return
+    value.release()
+    assert(false)
+
+func stage_first(database: db.Database*, group: str, first: const u8[]) -> !:
+    let tx = try database.begin()
+    defer tx.release()
+    try tx.value().add("/repositories/alice/6c61726765/chunks", "directory")
+    try tx.value().add(group, "object-chunks")
+    let value = try prism.Value.array(prism.DType.uint8, [(i64)first.length], first)
+    defer value.release()
+    try tx.value().set(group, "c0", value)
+    discard(try tx.value().commit(wait_ms = 1000))
+    tx.value().close()
+    discard(try database.bake(wait_ms = 1000))
+
+func faults(database: db.Database*, stage_only: bool = false, resume: bool = false) -> !:
+    let payload = try alloc u8[1048590] in memory.heap
+    defer free(payload) in memory.heap
+    for i in 0..<payload.length: payload[i] = (u8)(i % 251)
+    let wire = try alloc u8[payload.length + 32] in memory.heap
+    defer free(wire) in memory.heap
+    let n = try git.encode_object("blob", payload, wire)
+    var id: u8[20]
+    discard(try git.hash_blob(payload, id))
+    var digest: u8[32]
+    discard(try crypto_native.digest(wire[..<n], digest))
+    var key: u8[64]
+    let digits = b"0123456789abcdef"
+    for i in 0..<(usize)32:
+        key[i * 2] = digits[(usize)(digest[i] >> 4)]
+        key[i * 2 + 1] = digits[(usize)(digest[i] & 15)]
+    var group_buffer: u8[160]
+    let group = try format(group_buffer, f"/repositories/alice/6c61726765/chunks/{(str)key}")
+    if not resume: try stage_first(database, group, wire[..<1048576])
+    # An interrupted stage must not be visible as an object, even with valid c0.
+    try expect_missing(database, id)
+    if stage_only: return
+    try repositories.put_object(database, "alice", "alice", "large", wire[..<n], id)
+    try roundtrip(database, payload, false)
+    # Same-length corruption must fail SHA256 before returning assembled bytes.
+    let corrupt = try alloc u8[n - 1048576] in memory.heap
+    defer free(corrupt) in memory.heap
+    for i in 0..<corrupt.length: corrupt[i] = wire[1048576 + i]
+    corrupt[0] ^= 1
+    let changed = try database.begin()
+    defer changed.release()
+    let poison = try prism.Value.array(prism.DType.uint8, [(i64)corrupt.length], corrupt)
+    defer poison.release()
+    try changed.value().set(group, "c1", poison)
+    discard(try changed.value().commit(wait_ms = 1000))
+    changed.value().close()
+    try expect_invalid(database, id)
+    var encoded: u8[40]
+    discard(try git.hex_id(id, encoded))
+    var location_buffer: u8[160]
+    let location = try format(location_buffer, f"/repositories/alice/6c61726765/objects/{(str)encoded}")
+    var sizes: i64[3] = [0, -1, (i64)repositories.max_object_bytes + 1]
+    for size in sizes:
+        let bad = try database.begin()
+        defer bad.release()
+        let invalid_size = try prism.Value.integer(size)
+        defer invalid_size.release()
+        try bad.value().set(location, "size", invalid_size)
+        discard(try bad.value().commit(wait_ms = 1000))
+        bad.value().close()
+        try expect_invalid(database, id)
+    let bad_key = try database.begin()
+    defer bad_key.release()
+    let key_value = try prism.Value.text("../escape")
+    defer key_value.release()
+    try bad_key.value().set(location, "chunks", key_value)
+    discard(try bad_key.value().commit(wait_ms = 1000))
+    bad_key.value().close()
+    try expect_invalid(database, id)
+
+pub func main(arguments: c.str[]) -> i32!:
+    assert(arguments.length == 4)
+    let database = try db.Database.open((str)arguments[1], "large-test-token")
+    defer database.release()
+    let phase = (str)arguments[2]
+    if phase == "read":
+        try data_cases(database.value(), arguments[3], false)
+    elif phase == "resume":
+        try faults(database.value(), resume = true)
+    else:
+        let authority = try auth.Authority.attach(try database.value().store())
+        defer authority.release()
+        try authority.value().bootstrap("alice", "disposable-large-test-password")
+        try repositories.initialize(database.value())
+        try repositories.create(database.value(), "alice", "large")
+        if phase == "limits":
+            try limits(database.value())
+        elif phase == "faults":
+            try faults(database.value())
+        elif phase == "stage":
+            try faults(database.value(), stage_only = true)
+        elif phase == "ipc":
+            try database.value().listen()
+            var socket_buffer: u8[512]
+            let socket = try format(socket_buffer, f"{(str)arguments[1]}.sock")
+            let client = try db.Database.connect(socket, "large-test-token")
+            defer client.release()
+            try data_cases(client.value(), arguments[3], true)
+        else:
+            try data_cases(database.value(), arguments[3], true)
+    print("PASS repository large objects")
+    return 0
