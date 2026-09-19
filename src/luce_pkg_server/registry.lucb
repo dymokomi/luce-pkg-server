@@ -9,6 +9,7 @@ import os
 import c
 import strings
 import repositories
+import git
 
 func failed(code: ErrorCode, message: str) -> interop.Outcome[interop.Reference[http.Response]]:
     let copied = interop.copy_text(message) catch failure:
@@ -16,7 +17,10 @@ func failed(code: ErrorCode, message: str) -> interop.Outcome[interop.Reference[
     return interop.Outcome[interop.Reference[http.Response]].failure(code, copied)
 
 func reply(text: str, status: i64 = 200) -> interop.Outcome[interop.Reference[http.Response]]:
-    let value = http.Response.bytes(text.bytes, "text/plain; charset=utf-8", status) catch failure:
+    return binary_reply(text.bytes, "text/plain; charset=utf-8", status)
+
+func binary_reply(bytes: const u8[], content_type: str, status: i64 = 200) -> interop.Outcome[interop.Reference[http.Response]]:
+    let value = http.Response.bytes(bytes, content_type, status) catch failure:
         return failed(failure.code, "internal error")
     value.value().header("Cache-Control", "no-store") catch failure:
         value.release()
@@ -116,6 +120,40 @@ struct App:
             return reply("repository creation failed", 503)
         return reply("created", 201)
 
+    func object(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
+        let request = view.value()
+        let token = bearer(request) catch: return reply("unauthorized", 401)
+        let who = self.authority.value().verify(token) catch: return reply("unauthorized", 401)
+        defer who.release()
+        let principal = who.value().text_at() catch: return reply("internal error", 500)
+        let owner = request.parameter("owner") else return reply("invalid path", 400)
+        let name = request.parameter("name") else return reply("invalid path", 400)
+        let encoded = request.parameter("id") else return reply("invalid path", 400)
+        if owner != principal: return reply("forbidden", 403)
+        if not repositories.valid_name(name): return reply("invalid repository", 400)
+        var id: u8[20]
+        discard(git.decode_id(encoded, id) catch: return reply("invalid object id", 400))
+        if request.method() == "PUT":
+            let body = request.body() catch: return reply("invalid body", 400)
+            defer body.release()
+            let wire = body.value().bytes((i64)repositories.max_object_bytes) catch: return reply("invalid body", 400)
+            let decoded = git.decode_object(wire) catch: return reply("invalid Git object", 400)
+            var actual: u8[20]
+            discard(git.hash_object(decoded.kind, decoded.payload, actual) catch: return reply("invalid Git object", 400))
+            for i in 0..<(usize)20:
+                if id[i] != actual[i]: return reply("object id mismatch", 400)
+            repositories.put_object(self.database.value(), principal, owner, name, wire, actual) catch failure:
+                if failure.code == auth.missing: return reply("repository not found", 404)
+                if failure.code == auth.invalid: return reply("invalid object", 400)
+                if failure.code == auth.conflict: return reply("object conflict", 409)
+                return reply("object storage unavailable", 503)
+            return reply(encoded)
+        let value = repositories.get_object(self.database.value(), principal, owner, name, id) catch failure:
+            if failure.code == auth.missing: return reply("object not found", 404)
+            return reply("object storage unavailable", 503)
+        defer value.release()
+        return binary_reply(value.value().bytes(), "application/octet-stream")
+
 let app_type = interop.Type[App]("registry", App.close)
 
 func store_token() -> str!:
@@ -154,6 +192,10 @@ func configure(socket: str) -> interop.Outcome[http.Application]:
     let create_repository = http.Handler.bind(app, App.create_repository) catch failure: trap(failure.message)
     defer create_repository.release()
     router.post("/v1/repositories", create_repository) catch failure: trap(failure.message)
+    let object = http.Handler.bind(app, App.object) catch failure: trap(failure.message)
+    defer object.release()
+    router.put("/v1/repositories/{owner}/{name}/objects/{id}", object) catch failure: trap(failure.message)
+    router.get("/v1/repositories/{owner}/{name}/objects/{id}", object) catch failure: trap(failure.message)
     let result = router.application() catch failure: trap(failure.message)
     return interop.Outcome[http.Application].success(interop.Owned[http.Application](result, result.owner))
 
@@ -174,7 +216,8 @@ func run(arguments: str[]) -> i32!:
     var socket_buffer: u8[4096]
     let socket = try format(socket_buffer, f"{arguments[1]}.sock")
     var options = http.ServerConfig(address = "127.0.0.1", port = port, network_workers = 2, application_workers = 2,
-        body_limit = 4096, memory_body_limit = 4096)
+        body_limit = (i64)repositories.max_object_bytes, memory_body_limit = 65536,
+        response_limit = (i64)repositories.max_object_bytes)
     var server = try http.Server(options, interop.WorkerEntry[str, unit, unit].native(configure), socket)
     defer server.close()
     try server.shutdown_on_signals()

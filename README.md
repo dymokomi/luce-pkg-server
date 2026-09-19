@@ -15,6 +15,19 @@ and creates a private repository owned by the verified session user. It returns
 no owner override; reverse-proxy identity headers grant no authority. A conflict
 may require reconciliation/retry, not necessarily mean the requested name exists.
 Two application workers use one Prism database owner through local IPC.
+Authenticated `PUT`/`GET /v1/repositories/{owner}/{name}/objects/{id}` transfer
+canonical **uncompressed** Git object envelopes (not Git smart HTTP or zlib loose
+files). Only the verified owner may access a repository; other principals get 403.
+PUT validates the requested 40-hex SHA-1 against the exact envelope before writes,
+returns 200 with that ID after durable storage (also for exact retries), 400 for
+invalid input, 404 for missing repositories, 409 for conflicts and 503 for storage
+failure. GET returns binary bytes with 200, missing objects with 404, and storage
+or integrity failure with 503. Handler responses use `Cache-Control: no-store`.
+Requests/responses are bounded to 64 MiB; incoming bodies spool above 64 KiB but
+handlers still assemble whole objects in memory. The transport receives bodies
+before handler authentication; per-account quotas, early admission/rate limits
+and disk-exhaustion policy remain required before public deployment. Account JSON
+handlers retain their own 4 KiB decode limits.
 The store token is required in `LUCE_REGISTRY_STORE_TOKEN`; it is not an HTTP
 administrator credential. There is no public bootstrap or invite-creation route.
 The disposable account fixture is for tests only. Password costs remain test-only;
@@ -46,8 +59,7 @@ Reads still assemble the entire object in bounded memory; this is not a streamin
 API. Interrupted/conflicting uploads can leave orphan chunks, and quotas, garbage
 collection and disk-exhaustion policy are not implemented. The content checksum
 is not publisher authentication or comprehensive SHA-1 collision-attack detection.
-Only repository creation is exposed over
-HTTP; object reads/writes remain internal APIs.
+Repository creation and owner-only object reads/writes are exposed over HTTP.
 This is **not** SHA-1 collision-attack protection, commit/tree semantic validation,
 graph reachability, Git push/pull, publisher authorization or signed releases.
 Malformed semantic contents can be stored and must not be advertised as a valid
@@ -67,9 +79,10 @@ binary objects, name/path boundaries, idempotence and persisted-content tamperin
 Large-object tests use an actual tracked Luce Base bootstrap source, a 17 MiB
 object exceeding Prism's 16 MiB IPC frame limit, and the full 64 MiB object bound.
 They also exercise inline/chunk split boundaries, independent-process reopen,
-interrupted staging/restart/resume and corrupted chunks/manifests. Public HTTP
-object transfer and client response limits still need integration before these
-tests can count as real remote-package acceptance.
+interrupted staging/restart/resume and corrupted chunks/manifests. HTTP integration
+uploads/downloads real bootstrap source, checks chunked requests, rejection without
+writes, cross-account denial, revocation and restart. Native luc remote integration
+and full Git/release workflows are still required for real package acceptance.
 
 Internal `update_refs` performs an atomic compare-and-swap batch of up to 64
 `RefUpdate` records (`name`, 20-byte `expected`, 20-byte `target`). Zero expected

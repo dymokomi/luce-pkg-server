@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import object_http
 
 binary, fixture = [Path(arg).resolve() for arg in sys.argv[1:]]
 
@@ -84,6 +85,7 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             assert admin_status == 200
             admin_headers = {'Authorization': 'Bearer ' + admin_token.decode()}
             assert request(port, 'POST', endpoint, {'name': 'demo'}, admin_headers)[0] == 201
+            object_path, object_bytes = object_http.check(port, headers, admin_headers)
             def identity(_):
                 return request(port, 'GET', '/v1/identity', headers=headers)
             with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
@@ -91,6 +93,8 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             assert request(port, 'POST', '/v1/sessions/revoke', headers=headers) == (200, b'revoked')
             assert request(port, 'GET', '/v1/identity', headers=headers)[0] == 401
             assert request(port, 'POST', endpoint, {'name': 'revoked'}, headers)[0] == 401
+            assert object_http.transfer(port, 'GET', object_path, headers=headers)[0] == 401
+            assert object_http.transfer(port, 'PUT', object_path, b'', headers)[0] == 401
             assert request(port, 'POST', '/v1/sessions', {'name': 'testadmin', 'password': 'fixture-password'})[0] == 200
         finally:
             process.terminate()
@@ -121,6 +125,7 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             assert status == 200 and len(restored) == 32
             assert request(port, 'GET', '/v1/identity', headers={'Authorization': 'Bearer ' + restored.decode()}) == (200, b'testuser')
             restored_headers = {'Authorization': 'Bearer ' + restored.decode()}
+            assert object_http.transfer(port, 'GET', object_path, headers=restored_headers) == (200, object_bytes)
             assert request(port, 'POST', '/v1/repositories', {'name': 'demo'}, restored_headers)[0] == 409
             assert request(port, 'POST', '/v1/repositories', {'name': 'parallel'}, restored_headers)[0] == 409
             assert request(port, 'POST', '/v1/repositories', {'name': 'after-restart'}, restored_headers)[0] == 201
