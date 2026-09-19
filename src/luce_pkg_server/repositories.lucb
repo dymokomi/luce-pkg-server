@@ -1,5 +1,6 @@
 ## Internal repository storage. Principal MUST come from verified authentication,
-## never from a request field. Object/ref APIs remain internal; no graph validation.
+## never from a request field. Ref updates require bounded graph closure; object
+## uploads alone do not validate graph edges or publish refs.
 import db
 import prism
 import interop
@@ -336,9 +337,87 @@ pub func get_ref(database: db.Database*, principal: str, owner: str, name: str, 
     try require_owner(snapshot.value(), path, principal)
     return try read_ref(snapshot.value(), location, ref_name)
 
+struct GraphNode:
+    var id: u8[20]
+    var kind: u8
+
+func kind_code(kind: str) -> u8!:
+    if kind == "blob": return 1
+    if kind == "tree": return 2
+    if kind == "commit": return 3
+    if kind == "tag": return 4
+    error(prism.invalid, "invalid graph object type")
+
+struct Graph:
+    var nodes: GraphNode[]
+    var slots: usize[]
+    var count: usize
+    var edges: usize
+    var probes: usize
+
+    mutating func add(id: const u8[], kind: u8) -> !:
+        if id.length != 20 or zero_id(id): error(prism.invalid, "invalid graph identity")
+        self.edges += 1
+        if self.edges > 65536: error(prism.invalid, "graph edge limit exceeded")
+        var bucket: usize = 0
+        for byte in id: bucket = (bucket * 31 + (usize)byte) & 8191
+        while true:
+            self.probes += 1
+            if self.probes > 16777216: error(prism.invalid, "graph lookup work limit exceeded")
+            let slot = self.slots[bucket]
+            if slot == 0:
+                if self.count >= self.nodes.length: error(prism.invalid, "graph object limit exceeded")
+                self.nodes[self.count] = GraphNode(kind = kind)
+                for i in 0..<(usize)20: self.nodes[self.count].id[i] = id[i]
+                self.count += 1
+                self.slots[bucket] = self.count
+                return
+            if same(self.nodes[slot - 1].id, id):
+                let expected = self.nodes[slot - 1].kind
+                if kind != 0 and expected != 0 and kind != expected: error(prism.invalid, "graph object type conflict")
+                if expected == 0: self.nodes[slot - 1].kind = kind
+                return
+            bucket = (bucket + 1) & 8191
+
+    mutating func add_hex(id: str, kind: u8) -> !:
+        var bytes: u8[20]
+        try git.decode_id(id, bytes)
+        try self.add(bytes, kind)
+
+    mutating func validate(session: prism.Session*, path: str) -> !:
+        var at: usize = 0
+        var total: usize = 0
+        while at < self.count:
+            let value = try checked_object(session, path, self.nodes[at].id)
+            defer value.release()
+            let bytes = value.value().bytes()
+            if bytes.length > 268435456 - total: error(prism.invalid, "graph byte limit exceeded")
+            total += bytes.length
+            let object = try git.decode_object(bytes)
+            let actual = try kind_code(object.kind)
+            if self.nodes[at].kind != 0 and self.nodes[at].kind != actual: error(prism.invalid, "graph target type mismatch")
+            self.nodes[at].kind = actual
+            if actual == 2:
+                discard(try git.validate_tree(object.payload))
+                var offset: usize = 0
+                while offset < object.payload.length:
+                    let entry = try git.decode_tree_entry(object.payload[offset..])
+                    # Gitlinks identify commits in another repository, not local edges.
+                    if entry.mode != "160000": try self.add(entry.id, 2 if entry.mode == "40000" else 1)
+                    offset += entry.consumed
+            elif actual == 3:
+                let commit = try git.decode_commit(object.payload)
+                try self.add_hex(commit.tree, 2)
+                for i in 0..<commit.parent_count: try self.add_hex(try commit.parent(i), 3)
+            elif actual == 4:
+                let tag = try git.decode_tag(object.payload)
+                try self.add_hex(tag.object, try kind_code(tag.kind))
+            at += 1
+
 ## Atomic CAS of every ref in the batch, including cross-ref prefix checks.
 ## Shared guard writes serialize competing batches, since Prism detects write
-## overlaps, not read predicates. No force-push policy or graph closure yet.
+## overlaps, not read predicates. Graph closure is checked in the transaction's
+## snapshot. No fast-forward policy, identity/date fsck or signature verification.
 pub func update_refs(database: db.Database*, principal: str, owner: str, name: str, updates: const RefUpdate[]) -> !:
     var path_buffer: u8[192]
     let path = try repo_path(principal, owner, name, path_buffer)
@@ -357,6 +436,12 @@ pub func update_refs(database: db.Database*, principal: str, owner: str, name: s
     let tx = try database.begin()
     defer tx.release()
     try require_owner(tx.value(), path, principal)
+    let nodes = try alloc GraphNode[4096] in memory.heap
+    defer free(nodes) in memory.heap
+    let slots = try alloc usize[8192] in memory.heap
+    defer free(slots) in memory.heap
+    for i in 0..<slots.length: slots[i] = 0
+    var graph = Graph(nodes = nodes, slots = slots)
     let children = try tx.value().children(root)
     defer children.release()
     if children.value().count() > max_refs: error(prism.invalid, "stored ref count exceeds limit")
@@ -382,12 +467,9 @@ pub func update_refs(database: db.Database*, principal: str, owner: str, name: s
             error(prism.conflict, "expected ref is missing")
         if not zero_id(update.target):
             retained += 1
-            let object = try checked_object(tx.value(), path, update.target)
-            defer object.release()
-            let decoded = try git.decode_object(object.value().bytes())
-            if strings.starts_with(update.name, "refs/heads/") and decoded.kind != "commit":
-                error(prism.invalid, "branch target must be a commit")
+            try graph.add(update.target, 3 if strings.starts_with(update.name, "refs/heads/") else 0)
     if retained > max_refs: error(prism.invalid, "repository ref limit exceeded")
+    try graph.validate(tx.value(), path)
     if not try tx.value().contains(root): try tx.value().add(root, "directory")
     let guard = try prism.Value.boolean(true)
     defer guard.release()

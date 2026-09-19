@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import heap_process
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,7 +18,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base', type=Path, default=ROOT / 'build/toolchain/luce-base')
     parser.add_argument('--mode', choices=[*MODES, 'all', 'sanitize'], default='all')
-    parser.add_argument('--fixture', choices=['repositories', 'refs', 'large_objects'], default='repositories')
+    parser.add_argument('--fixture', choices=['repositories', 'refs', 'large_objects', 'graph'], default='repositories')
     parser.add_argument('--heap', action='store_true', help='also require zero macOS leaks on separate stores')
     args = parser.parse_args()
     if args.heap and sys.platform != 'darwin':
@@ -28,19 +29,26 @@ def main():
     out = ROOT / 'build' / args.fixture
     out.mkdir(parents=True, exist_ok=True)
 
-    def run(command):
+    def run(command, timeout=180):
         print('RUN', ' '.join(map(str, command)), flush=True)
-        subprocess.run(list(map(str, command)), cwd=ROOT, env=env, check=True, timeout=180)
+        started = time.monotonic()
+        try:
+            subprocess.run(list(map(str, command)), cwd=ROOT, env=env, check=True, timeout=timeout)
+        finally:
+            print(f'ELAPSED {time.monotonic() - started:.3f}s (limit {timeout}s)', flush=True)
 
     def fixture(binary, store, phase):
         # leaks reports its own exit, not the child's. Check the real fixture
         # separately, then require completion AND zero leaks on an isolated store.
         extra = [ROOT.parent / 'luce-base/bootstrap/luce-base-arm64-macos.c'] if args.fixture == 'large_objects' else []
-        run([binary, store, phase, *extra])
+        # The full 64 MiB storage boundary can exceed three minutes in unoptimized
+        # C on hosted Linux. Keep the exact fixture; this is not a latency SLA.
+        timeout = 600 if args.fixture == 'large_objects' and phase == 'limits' else 180
+        run([binary, store, phase, *extra], timeout=timeout)
         if args.heap:
             result = heap_process.run(['/usr/bin/leaks', '--quiet', '--noContent', '--atExit', '--',
                                      str(binary), str(store) + '-heap', phase, *extra],
-                                    cwd=ROOT, env=env, timeout=180)
+                                    cwd=ROOT, env=env, timeout=timeout)
             print(result.stdout, end='', flush=True)
             print(result.stderr, end='', file=sys.stderr, flush=True)
             result.check_returncode()
@@ -72,7 +80,7 @@ def main():
                 fixture(binary, Path(temporary) / 'faults', 'faults')
                 fixture(binary, Path(temporary) / 'interrupted', 'stage')
                 fixture(binary, Path(temporary) / 'interrupted', 'resume')
-            else:
+            elif args.fixture != 'graph':
                 for attempt in range(4):
                     fixture(binary, Path(temporary) / f'race-{attempt}', 'race')
             if args.fixture in ('refs', 'large_objects'):

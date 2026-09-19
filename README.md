@@ -98,9 +98,16 @@ means creation; zero target means deletion. `get_ref` returns an owned 20-byte
 Prism value or a missing error. Refs are restricted to `refs/heads/` and
 `refs/tags/`, with Git syntax, a 1024-byte name bound, lossless encoded storage keys
 and at most 1024 refs per repository. Branch targets must be stored commit
-envelopes; tag refs may name any stored object kind. This checks envelope identity
-and kind, **not** commit structure, graph completeness, ancestry or force-push
-policy. Symbolic refs/HEAD, reflogs and HTTP ref endpoints are not implemented.
+envelopes; tag refs may name any stored object kind. Before publishing, the same
+transaction snapshot is used to traverse every target's reachable commit/tree/tag
+graph, validate structural encoding and object IDs, and require matching edge
+types. Missing parents, tree entries and tag targets fail the whole batch.
+Gitlinks are external-repository references and are not traversed. The iterative
+walk deduplicates objects across all batch roots and is bounded to 4096 objects,
+65536 edges, 256 MiB of decoded envelopes and 16777216 hash-table probes. Oversized
+histories are rejected, not partially checked. No commit identity/date fsck,
+signature verification, ancestry/force-push policy or SHA-1 collision protection
+is implied. Symbolic refs/HEAD, reflogs and HTTP ref endpoints remain unimplemented.
 
 Every expected ID and the final namespace is checked before one transaction is
 committed. Prefix conflicts (`topic` versus `topic/child`) are rejected, including
@@ -119,8 +126,14 @@ python3 tests/run_repositories.py --fixture refs --mode native0 --heap # macOS
 Ref fixtures cover stale IDs, malformed/bounded inputs, owner rejection, absent
 objects and wrong branch target kinds, atomic multi-ref failure and renames,
 prefix/batch worker races, the full 1024-ref bound and restart persistence. Fixture
-commit payloads are deliberately opaque: these are ref-storage tests, not Git
-history acceptance tests.
+commits now contain valid empty trees. The separate `graph` fixture checks real
+blob/tree/commit/tag relationships, missing and mistyped edges, malformed commits,
+submodule exclusions, the traversal object bound and atomic rejection, locally and
+over IPC with fresh-process reopen. These are not yet full Git push/pull tests.
+The harness reports per-command elapsed time. The full 64 MiB large-object
+boundary has a 600-second ceiling (other commands retain 180 seconds): the
+unoptimized-C fixture exceeded 180 seconds on hosted Linux. This is a correctness
+allowance, not a performance claim; the exact boundary/data assertions remain.
 
 macOS heap tests capture output in regular files and wait for the leak tool's
 actual exit status, then clean up only the process group launched by the test.

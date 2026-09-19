@@ -11,19 +11,23 @@ var second_id: u8[20]
 var blob_id: u8[20]
 var socket_buffer: u8[512]
 var socket_length: usize
+let first_commit = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor Fixture <test@example.test> 1 +0000\ncommitter Fixture <test@example.test> 1 +0000\n\nfirst\n"
+let second_commit = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor Fixture <test@example.test> 2 +0000\ncommitter Fixture <test@example.test> 2 +0000\n\nsecond\n"
 
 func identify() -> !:
-    discard(try git.hash_object("commit", b"first fixture commit", first_id))
-    discard(try git.hash_object("commit", b"second fixture commit", second_id))
+    discard(try git.hash_object("commit", first_commit, first_id))
+    discard(try git.hash_object("commit", second_commit, second_id))
     discard(try git.hash_blob(b"fixture blob", blob_id))
 
 func seed(database: db.Database*, name: str) -> !:
     try repositories.create(database, "alice", name)
-    var wire: u8[128]
+    var wire: u8[512]
     var result: u8[20]
-    var n = try git.encode_object("commit", b"first fixture commit", wire)
+    var n = try git.encode_object("tree", b"", wire)
     try repositories.put_object(database, "alice", "alice", name, wire[..<n], result)
-    n = try git.encode_object("commit", b"second fixture commit", wire)
+    n = try git.encode_object("commit", first_commit, wire)
+    try repositories.put_object(database, "alice", "alice", name, wire[..<n], result)
+    n = try git.encode_object("commit", second_commit, wire)
     try repositories.put_object(database, "alice", "alice", name, wire[..<n], result)
     n = try git.encode_object("blob", b"fixture blob", wire)
     try repositories.put_object(database, "alice", "alice", name, wire[..<n], result)

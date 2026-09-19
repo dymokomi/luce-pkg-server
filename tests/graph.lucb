@@ -1,0 +1,127 @@
+import repositories
+import db
+import auth
+import prism
+import git
+import memory
+
+var zero: u8[20]
+
+func put(database: db.Database*, kind: str, payload: const u8[], id: u8[]) -> !:
+    let wire = try alloc u8[payload.length + 32] in memory.heap
+    defer free(wire) in memory.heap
+    let n = try git.encode_object(kind, payload, wire)
+    try repositories.put_object(database, "alice", "alice", "graph", wire[..<n], id)
+
+func refuse(database: db.Database*, id: const u8[], required: ErrorCode? = none) -> !:
+    let snapshot = try database.snapshot()
+    defer snapshot.release()
+    let before = try snapshot.value().revision()
+    var denied = false
+    repositories.update_refs(database, "alice", "alice", "graph",
+        [repositories.RefUpdate(name = "refs/tags/rejected", expected = zero, target = id)]) catch failure:
+        if let code = required: assert(failure.code == code)
+        denied = true
+    assert(denied)
+    let after = try database.snapshot()
+    defer after.release()
+    assert(try after.value().revision() == before)
+
+func cases(database: db.Database*) -> !:
+    var blob: u8[20]
+    try put(database, "blob", b"source", blob)
+    var tree: u8[20]
+    var payload: u8[4096]
+    var n = try git.encode_tree_entry(git.TreeEntry(mode = "100644", name = "main.lucb", id = blob), payload)
+    try put(database, "tree", payload[..<n], tree)
+    var tree_text: u8[40]
+    discard(try git.hex_id(tree, tree_text))
+    var commit: u8[20]
+    let text = try format(payload, f"tree {(str)tree_text}\nauthor Fixture <a@b> 1 +0000\ncommitter Fixture <a@b> 1 +0000\n\ninitial\n")
+    try put(database, "commit", text.bytes, commit)
+    try repositories.update_refs(database, "alice", "alice", "graph",
+        [repositories.RefUpdate(name = "refs/heads/main", expected = zero, target = commit)])
+    var commit_text: u8[40]
+    discard(try git.hex_id(commit, commit_text))
+    var tag: u8[20]
+    let tag_text = try format(payload, f"object {(str)commit_text}\ntype commit\ntag v1\n\nrelease\n")
+    try put(database, "tag", tag_text.bytes, tag)
+    try repositories.update_refs(database, "alice", "alice", "graph",
+        [repositories.RefUpdate(name = "refs/tags/v1", expected = zero, target = tag)])
+    var wrong: u8[20]
+    let wrong_tag = try format(payload, f"object {(str)commit_text}\ntype tree\ntag wrong\n\n")
+    try put(database, "tag", wrong_tag.bytes, wrong)
+    try refuse(database, wrong)
+    try put(database, "commit", b"not a commit", wrong)
+    try refuse(database, wrong)
+    var missing: u8[20]
+    for i in 0..<(usize)20: missing[i] = 17
+    n = try git.encode_tree_entry(git.TreeEntry(mode = "100644", name = "missing", id = missing), payload)
+    try put(database, "tree", payload[..<n], wrong)
+    try refuse(database, wrong)
+    n = try git.encode_tree_entry(git.TreeEntry(mode = "40000", name = "wrongtype", id = blob), payload)
+    try put(database, "tree", payload[..<n], wrong)
+    try refuse(database, wrong)
+    let parent_text = try format(payload, f"tree {(str)tree_text}\nparent 1111111111111111111111111111111111111111\nauthor A\ncommitter A\n\n")
+    try put(database, "commit", parent_text.bytes, wrong)
+    try refuse(database, wrong)
+    # Gitlinks intentionally refer to another repository and need no local object.
+    n = try git.encode_tree_entry(git.TreeEntry(mode = "160000", name = "submodule", id = missing), payload)
+    try put(database, "tree", payload[..<n], wrong)
+    try repositories.update_refs(database, "alice", "alice", "graph",
+        [repositories.RefUpdate(name = "refs/tags/gitlink", expected = zero, target = wrong)])
+    # A bad graph in a batch cannot publish an otherwise valid sibling ref.
+    try put(database, "commit", b"broken", wrong)
+    let before = try database.snapshot()
+    defer before.release()
+    var failed = false
+    repositories.update_refs(database, "alice", "alice", "graph", [
+        repositories.RefUpdate(name = "refs/tags/good", expected = zero, target = blob),
+        repositories.RefUpdate(name = "refs/tags/bad", expected = zero, target = wrong)]) catch:
+        failed = true
+    assert(failed)
+    let after = try database.snapshot()
+    defer after.release()
+    assert(try before.value().revision() == try after.value().revision())
+    # The root plus 4096 distinct child IDs must hit the object bound before
+    # loading the intentionally absent children. This tests bounded traversal.
+    let wide = try alloc u8[131072] in memory.heap
+    defer free(wide) in memory.heap
+    n = 0
+    let digits = b"0123456789abcdef"
+    for i in 0..<(usize)4096:
+        var label: u8[4]
+        for j in 0..<(usize)4: label[j] = digits[(i >> ((3 - j) * 4)) & 15]
+        var child: u8[20]
+        child[0] = 1
+        child[18] = (u8)(i >> 8)
+        child[19] = (u8)(i & 255)
+        n += try git.encode_tree_entry(git.TreeEntry(mode = "100644", name = (str)label, id = child), wide[n..])
+    try put(database, "tree", wide[..<n], wrong)
+    try refuse(database, wrong, prism.invalid)
+
+pub func main(arguments: str[]) -> i32!:
+    assert(arguments.length == 3)
+    let database = try db.Database.open(arguments[1], "graph-test")
+    defer database.release()
+    if arguments[2] == "read":
+        let value = try repositories.get_ref(database.value(), "alice", "alice", "graph", "refs/heads/main")
+        defer value.release()
+        assert(value.value().bytes().length == 20)
+    else:
+        let authority = try auth.Authority.attach(try database.value().store())
+        defer authority.release()
+        try authority.value().bootstrap("alice", "graph-fixture-password")
+        try repositories.initialize(database.value())
+        try repositories.create(database.value(), "alice", "graph")
+        if arguments[2] == "ipc":
+            try database.value().listen()
+            var socket_buffer: u8[512]
+            let socket = try format(socket_buffer, f"{arguments[1]}.sock")
+            let client = try db.Database.connect(socket, "graph-test")
+            defer client.release()
+            try cases(client.value())
+        else:
+            try cases(database.value())
+    print("PASS repository graph closure, types, gitlinks, atomic rejection and reopen")
+    return 0
