@@ -83,6 +83,14 @@ prefix/batch worker races, the full 1024-ref bound and restart persistence. Fixt
 commit payloads are deliberately opaque: these are ref-storage tests, not Git
 history acceptance tests.
 
+macOS heap tests capture output in regular files and wait for the leak tool's
+actual exit status, then clean up only the process group launched by the test.
+This avoids waiting forever on output handles retained by a stopped instrumented
+child after the tool completes. Fixture completion, ordinary child status and
+zero-leak assertions remain required; true tool timeouts still fail. The helper
+and lifecycle regressions are adapted from this author's dual-licensed
+`luce-auth` test harness, not linked into registry runtime code.
+
 ## End-to-end goal
 
 1. Register the owner's `dymokomi` account at `https://pkg.luciaos.com` through

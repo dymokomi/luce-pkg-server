@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import heap_process
 
 ROOT = Path(__file__).resolve().parents[1]
 MODES = {f'native{i}': ['--native', '--opt', str(i)] for i in range(4)}
@@ -36,9 +37,9 @@ def main():
         # separately, then require completion AND zero leaks on an isolated store.
         run([binary, store, phase])
         if args.heap:
-            result = subprocess.run(['/usr/bin/leaks', '--quiet', '--noContent', '--atExit', '--',
+            result = heap_process.run(['/usr/bin/leaks', '--quiet', '--noContent', '--atExit', '--',
                                      str(binary), str(store) + '-heap', phase],
-                                    cwd=ROOT, env=env, capture_output=True, text=True, timeout=180)
+                                    cwd=ROOT, env=env, timeout=180)
             print(result.stdout, end='', flush=True)
             print(result.stderr, end='', file=sys.stderr, flush=True)
             result.check_returncode()
