@@ -109,6 +109,18 @@ histories are rejected, not partially checked. No commit identity/date fsck,
 signature verification, ancestry/force-push policy or SHA-1 collision protection
 is implied. Symbolic refs/HEAD, reflogs and HTTP ref endpoints remain unimplemented.
 
+Internal `receive_pack` connects the native push-command parser, non-thin pack
+decoder, immutable object storage and graph-checked ref transaction. Its principal
+must already be authenticated. It validates the whole pack and the structure of
+every contained tree/commit/tag before staging any objects, then publishes all refs
+with compare-and-swap. Unsupported capabilities fail before staging; the accepted
+set is `report-status`, `atomic`, `ofs-delta`, `delete-refs`, `object-format=sha1`
+and informational `agent=` tokens. This core does not advertise capabilities,
+encode report-status, expose receive-pack HTTP or implement Git authentication.
+Valid staging followed by a ref conflict or disconnected graph can leave
+unreferenced objects; refs remain atomic, but object storage is not rolled back.
+No hooks, thin-pack external bases, fast-forward policy, GC or quotas are provided.
+
 Every expected ID and the final namespace is checked before one transaction is
 committed. Prefix conflicts (`topic` versus `topic/child`) are rejected, including
 concurrent creation. A shared per-repository marker write forces competing batches

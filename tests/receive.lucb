@@ -1,0 +1,138 @@
+import repositories
+import db
+import auth
+import prism
+import git
+
+let first = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor A\ncommitter A\n\nfirst\n"
+var zero: u8[20]
+
+func append(wire: u8[], at: usize, old: const u8[], target: const u8[], name: str, caps: str, initial: bool) -> usize!:
+    var old_text: u8[40]
+    var new_text: u8[40]
+    discard(try git.hex_id(old, old_text))
+    discard(try git.hex_id(target, new_text))
+    var buffer: u8[1024]
+    let separator = "\0" if initial else ""
+    let line = try format(buffer, f"{(str)old_text} {(str)new_text} {name}{separator}{caps}")
+    return at + try git.encode_packet(git.PacketKind.data, line.bytes, wire[at..])
+
+func expect(database: db.Database*, name: str, id: const u8[]) -> !:
+    let ref = try repositories.get_ref(database, "alice", "alice", "push", name)
+    defer ref.release()
+    let bytes = ref.value().bytes()
+    for i in 0..<(usize)20: assert(bytes[i] == id[i])
+
+func absent(database: db.Database*, name: str) -> !:
+    let ref = repositories.get_ref(database, "alice", "alice", "push", name) catch failure:
+        assert(failure.code == prism.missing)
+        return
+    ref.release()
+    assert(false)
+
+func no_writes(database: db.Database*, wire: const u8[]) -> !:
+    let before = try database.snapshot()
+    defer before.release()
+    var failed = false
+    discard(repositories.receive_pack(database, "alice", "alice", "push", wire) catch:
+        failed = true
+        recover 0)
+    assert(failed)
+    let after = try database.snapshot()
+    defer after.release()
+    assert(try before.value().revision() == try after.value().revision())
+
+func cases(database: db.Database*) -> !:
+    var id: u8[20]
+    discard(try git.hash_object("commit", first, id))
+    var objects: git.Object[2]
+    objects[0] = git.Object(kind = "tree", payload = b"")
+    objects[1] = git.Object(kind = "commit", payload = first)
+    var wire: u8[16384]
+    var n = try append(wire, 0, zero, id, "refs/heads/main", "report-status atomic ofs-delta", true)
+    n = try append(wire, n, zero, id, "refs/tags/keep", "", false)
+    n += try git.encode_packet(git.PacketKind.flush, b"", wire[n..])
+    n += try git.encode_pack(objects, wire[n..])
+    wire[n - 1] ^= 1
+    try no_writes(database, wire[..<n])
+    wire[n - 1] ^= 1
+    var denied = false
+    discard(repositories.receive_pack(database, "bob", "alice", "push", wire[..<n]) catch:
+        denied = true
+        recover 0)
+    assert(denied)
+    assert(try repositories.receive_pack(database, "alice", "alice", "push", wire[..<n]) == 2)
+    try expect(database, "refs/heads/main", id)
+    try expect(database, "refs/tags/keep", id)
+    # A stale create fails without changing either ref or adding duplicate objects.
+    try no_writes(database, wire[..<n])
+    n = try append(wire, 0, zero, id, "refs/tags/unsupported", "side-band-64k", true)
+    n += try git.encode_packet(git.PacketKind.flush, b"", wire[n..])
+    n += try git.encode_pack(objects[..<0], wire[n..])
+    try no_writes(database, wire[..<n])
+    var parent: u8[40]
+    discard(try git.hex_id(id, parent))
+    var commit_buffer: u8[512]
+    let second = try format(commit_buffer, f"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nparent {(str)parent}\nauthor A\ncommitter A\n\nsecond\n")
+    var next: u8[20]
+    discard(try git.hash_object("commit", second.bytes, next))
+    objects[0] = git.Object(kind = "commit", payload = second.bytes)
+    n = try append(wire, 0, id, next, "refs/heads/main", "report-status atomic", true)
+    n = try append(wire, n, zero, id, "refs/tags/v1", "", false)
+    n += try git.encode_packet(git.PacketKind.flush, b"", wire[n..])
+    n += try git.encode_pack(objects[..<1], wire[n..])
+    assert(try repositories.receive_pack(database, "alice", "alice", "push", wire[..<n]) == 2)
+    try expect(database, "refs/heads/main", next)
+    # New ref to existing data still carries a valid empty pack.
+    n = try append(wire, 0, zero, id, "refs/tags/existing", "report-status", true)
+    n += try git.encode_packet(git.PacketKind.flush, b"", wire[n..])
+    n += try git.encode_pack(objects[..<0], wire[n..])
+    assert(try repositories.receive_pack(database, "alice", "alice", "push", wire[..<n]) == 1)
+    n = try append(wire, 0, next, zero, "refs/heads/main", "report-status delete-refs atomic", true)
+    n = try append(wire, n, id, zero, "refs/tags/v1", "", false)
+    n += try git.encode_packet(git.PacketKind.flush, b"", wire[n..])
+    assert(try repositories.receive_pack(database, "alice", "alice", "push", wire[..<n]) == 2)
+    try absent(database, "refs/heads/main")
+    try absent(database, "refs/tags/v1")
+    # Structurally valid but disconnected commit: staging may persist it, refs may not.
+    let broken = b"tree 1111111111111111111111111111111111111111\nauthor A\ncommitter A\n\nbroken\n"
+    discard(try git.hash_object("commit", broken, next))
+    objects[0] = git.Object(kind = "commit", payload = broken)
+    n = try append(wire, 0, zero, id, "refs/tags/good", "report-status atomic", true)
+    n = try append(wire, n, zero, next, "refs/heads/bad", "", false)
+    n += try git.encode_packet(git.PacketKind.flush, b"", wire[n..])
+    n += try git.encode_pack(objects[..<1], wire[n..])
+    denied = false
+    discard(repositories.receive_pack(database, "alice", "alice", "push", wire[..<n]) catch:
+        denied = true
+        recover 0)
+    assert(denied)
+    try absent(database, "refs/tags/good")
+    try absent(database, "refs/heads/bad")
+    try expect(database, "refs/tags/keep", id)
+
+pub func main(arguments: str[]) -> i32!:
+    assert(arguments.length == 3)
+    let database = try db.Database.open(arguments[1], "receive-test")
+    defer database.release()
+    if arguments[2] == "read":
+        var id: u8[20]
+        discard(try git.hash_object("commit", first, id))
+        try expect(database.value(), "refs/tags/keep", id)
+        try absent(database.value(), "refs/heads/main")
+    else:
+        let authority = try auth.Authority.attach(try database.value().store())
+        defer authority.release()
+        try authority.value().bootstrap("alice", "receive-fixture-password")
+        try repositories.initialize(database.value())
+        try repositories.create(database.value(), "alice", "push")
+        if arguments[2] == "ipc":
+            try database.value().listen()
+            var socket_buffer: u8[512]
+            let socket = try format(socket_buffer, f"{arguments[1]}.sock")
+            let client = try db.Database.connect(socket, "receive-test")
+            defer client.release()
+            try cases(client.value())
+        else: try cases(database.value())
+    print("PASS repository receive pack validation, CAS, graph atomicity, deletion and reopen")
+    return 0

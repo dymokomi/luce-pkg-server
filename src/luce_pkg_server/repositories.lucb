@@ -276,6 +276,57 @@ func checked_object(session: prism.Session*, path: str, id: const u8[]) -> inter
     return value
 
 pub let max_refs: usize = 1024
+
+func push_capabilities(capabilities: str) -> !:
+    var start: usize = 0
+    for i in 0..<capabilities.length + 1:
+        if i != capabilities.length and capabilities.bytes[i] != ' ': continue
+        let capability = (str)capabilities.bytes[start..<i]
+        if capability.length != 0 and capability != "report-status" and capability != "atomic" and capability != "ofs-delta" and capability != "delete-refs" and capability != "object-format=sha1" and not strings.starts_with(capability, "agent="):
+            error(prism.invalid, "unsupported push capability")
+        start = i + 1
+
+## Principal must already be authenticated. This is the receive transaction core,
+## not HTTP negotiation or a report-status encoder. Validates a complete non-thin
+## pack before staging objects, then atomically CAS-publishes graph-checked refs.
+## Failed staging/ref publication may leave unreferenced immutable objects; retry
+## and quota/GC policy belong to the caller. No fast-forward/signature policy yet.
+pub func receive_pack(database: db.Database*, principal: str, owner: str, name: str, input: const u8[]) -> usize!:
+    var path_buffer: u8[192]
+    let path = try repo_path(principal, owner, name, path_buffer)
+    let snapshot = try database.snapshot()
+    defer snapshot.release()
+    try require_owner(snapshot.value(), path, principal)
+    snapshot.value().close()
+    let request = try git.decode_push(input)
+    try push_capabilities(request.capabilities)
+    var previous: u8[1280]
+    var targets: u8[1280]
+    var updates: RefUpdate[64]
+    for i in 0..<request.count:
+        let command = try request.at(i)
+        if not valid_ref(command.name): error(prism.invalid, "unsupported push reference")
+        try git.decode_id(command.old_id, previous[i * 20..<i * 20 + 20])
+        try git.decode_id(command.new_id, targets[i * 20..<i * 20 + 20])
+        updates[i] = RefUpdate(name = command.name, expected = previous[i * 20..<i * 20 + 20], target = targets[i * 20..<i * 20 + 20])
+    if request.pack.length > 0:
+        var pack = try git.decode_pack(request.pack)
+        defer pack.close()
+        # Validate every packed object's structure, even if no requested ref uses it.
+        for item in pack.items:
+            if item.kind == "tree": discard(try git.validate_tree(item.payload))
+            elif item.kind == "commit": discard(try git.decode_commit(item.payload))
+            elif item.kind == "tag": discard(try git.decode_tag(item.payload))
+        for item in pack.items:
+            let wire = try alloc u8[item.payload.length + 32] in memory.heap
+            defer free(wire) in memory.heap
+            let count = try git.encode_object(item.kind, item.payload, wire)
+            var actual: u8[20]
+            try put_object(database, principal, owner, name, wire[..<count], actual)
+            if not same(actual, item.id): error(prism.invalid, "stored push object identity mismatch")
+    try update_refs(database, principal, owner, name, updates[..<request.count])
+    return request.count
+
 pub let max_ref_name: usize = 1024
 pub let max_ref_updates: usize = 64
 
