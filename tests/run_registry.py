@@ -29,7 +29,8 @@ def main():
         print(f"MODE {mode}", flush=True)
         run([args.base.resolve(), "build", ROOT / "src/luce_pkg_server/registry.lucb", *flags, "-o", output / "registry"])
         run([args.base.resolve(), "build", ROOT / "tests/account_fixture.lucb", *flags, "-o", output / "account-fixture"])
-        run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/check_accounts.py"), output / "registry", output / "account-fixture"])
+        run([args.base.resolve(), "build", ROOT / "tests/client/native_transfer.lucb", *flags, "-o", output / "native-transfer"])
+        run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/check_accounts.py"), output / "registry", output / "account-fixture", output / "native-transfer"])
         print(f"PASS {mode}", flush=True)
     print("PASS all selected compiler modes", flush=True)
 

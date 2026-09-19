@@ -1,0 +1,7 @@
+[package]
+name = "registry_native_client_tests"
+source = "."
+
+[dependencies]
+luce_git = "../../../luce-git"
+luce_http_client = "../../../luce-http-client"

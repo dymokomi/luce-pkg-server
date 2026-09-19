@@ -83,6 +83,14 @@ interrupted staging/restart/resume and corrupted chunks/manifests. HTTP integrat
 uploads/downloads real bootstrap source, checks chunked requests, rejection without
 writes, cross-account denial, revocation and restart. Native luc remote integration
 and full Git/release workflows are still required for real package acceptance.
+The isolated `tests/client` consumer uses pinned `luce-http-client` and `luce-git`
+to log in, create a repository, PUT/GET the actual compiler source envelope,
+compare every byte and Git ID, revoke its session and verify access denial.
+It runs before and after registry restart in all six compiler modes and under
+ASan/UBSan. Python only starts the processes and supplies an independent HTTP
+oracle; this transfer path itself is native Luce Base. The client dependency is
+test-only, not a registry runtime dependency. This is not yet a `luc` command,
+public HTTPS verification, Git push/pull or signed package installation.
 
 Internal `update_refs` performs an atomic compare-and-swap batch of up to 64
 `RefUpdate` records (`name`, 20-byte `expected`, 20-byte `target`). Zero expected

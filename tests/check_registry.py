@@ -6,4 +6,6 @@ import sys
 
 if len(sys.argv) == 2:
     sys.argv.append(str(Path(sys.argv[1]).with_name("account-fixture")))
+if len(sys.argv) == 3:
+    sys.argv.append(str(Path(sys.argv[1]).with_name("native-transfer")))
 runpy.run_path(str(Path(__file__).with_name("check_accounts.py")), run_name="__main__")

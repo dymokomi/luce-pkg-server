@@ -21,7 +21,7 @@ jobs:
         working-directory: luce-pkg-server
         shell: bash
         run: |
-          for entry in BASE:luce-base LUCE:luce SERVER:luce-server DB:luce-db AUTH:luce-auth CRYPTO:luce-crypto PRISM:luce-prism TLS:luce-tls JSON:luce-json GIT:luce-git COMPRESS:luce-compress; do
+          for entry in BASE:luce-base LUCE:luce SERVER:luce-server DB:luce-db AUTH:luce-auth CRYPTO:luce-crypto PRISM:luce-prism TLS:luce-tls JSON:luce-json GIT:luce-git COMPRESS:luce-compress HTTP_CLIENT:luce-http-client; do
             pin="${entry%%:*}"
             repo="${entry#*:}"
             revision=$(cat "bootstrap/$pin")
