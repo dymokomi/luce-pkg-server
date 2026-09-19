@@ -135,9 +135,22 @@ process environment rather than command-line arguments. Real stock Git tests
 cover initial/incremental push with large similar blobs, atomic multi-ref/tag creation, deletion,
 up-to-date discovery, sorted refs, rejection reports and restart persistence.
 This follows [Git's HTTP protocol](https://git-scm.com/docs/gitprotocol-http).
-Fetch/clone/upload-pack and symbolic HEAD remain unsupported. Pack count, byte,
+HTTP fetch/clone and symbolic HEAD remain unsupported. Pack count, byte,
 lookup and delta-depth limits still bound accepted pushes. No live deployment or
 real credentials are involved.
+
+Internal `upload_pack` now implements bounded stateless fetch selection from one
+authenticated snapshot. Wants must equal current ref tips; unadvertised object IDs
+are rejected. It validates the wanted closure, acknowledges only commits in that
+closure, and subtracts the validated common-history closure before generating a
+full-object pack. A negotiation round returns ACK/NAK without a pack until `done`.
+Unknown/unrelated haves are ignored, not used as an arbitrary-object probe. It is
+read-only, retains object leases only through pack encoding, and inherits graph
+and pack resource limits. Discard output on any failure. Supported capability
+tokens are `ofs-delta`, `no-progress`, `object-format=sha1`, and informational
+`agent=`; multi-ACK, side-band, shallow and filter extensions are not implemented.
+Fetch advertisement (including peeled tags), HTTP dispatch and stock clone remain
+the next integration step; this internal API does not by itself expose download.
 
 Every expected ID and the final namespace is checked before one transaction is
 committed. Prefix conflicts (`topic` versus `topic/child`) are rejected, including

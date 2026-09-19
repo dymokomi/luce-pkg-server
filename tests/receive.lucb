@@ -44,6 +44,87 @@ func no_writes(database: db.Database*, wire: const u8[]) -> !:
     defer after.release()
     assert(try before.value().revision() == try after.value().revision())
 
+func fetch_wire(target: const u8[], base: const u8[], done: bool, wire: u8[], caps: str = "ofs-delta no-progress") -> usize!:
+    var encoded: u8[40]
+    discard(try git.hex_id(target, encoded))
+    var line: u8[128]
+    let separator = " " if caps.length > 0 else ""
+    var text = try format(line, f"want {(str)encoded}{separator}{caps}\n")
+    var used = try git.encode_packet(git.PacketKind.data, text.bytes, wire)
+    used += try git.encode_packet(git.PacketKind.flush, b"", wire[used..])
+    if base.length > 0:
+        discard(try git.hex_id(base, encoded))
+        text = try format(line, f"have {(str)encoded}\n")
+        used += try git.encode_packet(git.PacketKind.data, text.bytes, wire[used..])
+    used += try git.encode_packet(git.PacketKind.data if done else git.PacketKind.flush, b"done\n" if done else b"", wire[used..])
+    return used
+
+func fetch_cases(database: db.Database*, target: const u8[], parent: const u8[]) -> !:
+    var wire: u8[512]
+    var output: u8[16384]
+    var empty: const u8[]
+    let before = try database.snapshot()
+    defer before.release()
+    var n = try fetch_wire(target, empty, true, wire)
+    var used = try repositories.upload_pack(database, "alice", "alice", "push", wire[..<n], output)
+    var response = try git.decode_packet(output[..<used])
+    assert((str)response.payload == "NAK\n")
+    var pack = try git.decode_pack(output[response.consumed..<used])
+    defer pack.close()
+    assert(pack.items.length == 3)
+    n = try fetch_wire(target, parent, true, wire)
+    used = try repositories.upload_pack(database, "alice", "alice", "push", wire[..<n], output)
+    response = try git.decode_packet(output[..<used])
+    assert(strings.starts_with((str)response.payload, "ACK "))
+    pack.close()
+    pack = try git.decode_pack(output[response.consumed..<used])
+    assert(pack.items.length == 1 and pack.items[0].kind == "commit")
+    for i in 0..<(usize)20: assert(pack.items[0].id[i] == target[i])
+    n = try fetch_wire(target, target, true, wire)
+    used = try repositories.upload_pack(database, "alice", "alice", "push", wire[..<n], output)
+    response = try git.decode_packet(output[..<used])
+    pack.close()
+    pack = try git.decode_pack(output[response.consumed..<used])
+    assert(pack.items.length == 0)
+    n = try fetch_wire(target, parent, false, wire)
+    used = try repositories.upload_pack(database, "alice", "alice", "push", wire[..<n], output)
+    response = try git.decode_packet(output[..<used])
+    assert(response.consumed == used and strings.starts_with((str)response.payload, "ACK "))
+    var unknown: u8[20]
+    for i in 0..<(usize)20: unknown[i] = 17
+    n = try fetch_wire(target, unknown, false, wire)
+    used = try repositories.upload_pack(database, "alice", "alice", "push", wire[..<n], output)
+    assert((str)(try git.decode_packet(output[..<used])).payload == "NAK\n")
+    var failed = false
+    discard(repositories.upload_pack(database, "bob", "alice", "push", wire[..<n], output) catch:
+        failed = true
+        recover 0)
+    assert(failed)
+    n = try fetch_wire(unknown, empty, true, wire)
+    failed = false
+    discard(repositories.upload_pack(database, "alice", "alice", "push", wire[..<n], output) catch:
+        failed = true
+        recover 0)
+    assert(failed)
+    n = try fetch_wire(target, empty, true, wire)
+    failed = false
+    discard(repositories.upload_pack(database, "alice", "alice", "push", wire[..<n], output[..<16]) catch:
+        failed = true
+        recover 0)
+    assert(failed)
+    n = try fetch_wire(target, empty, true, wire, "")
+    used = try repositories.upload_pack(database, "alice", "alice", "push", wire[..<n], output)
+    assert((str)(try git.decode_packet(output[..<used])).payload == "NAK\n")
+    n = try fetch_wire(target, empty, true, wire, "side-band-64k")
+    failed = false
+    discard(repositories.upload_pack(database, "alice", "alice", "push", wire[..<n], output) catch:
+        failed = true
+        recover 0)
+    assert(failed)
+    let after = try database.snapshot()
+    defer after.release()
+    assert(try before.value().revision() == try after.value().revision())
+
 func cases(database: db.Database*) -> !:
     let advertisement = try alloc u8[2097152] in memory.heap
     defer free(advertisement) in memory.heap
@@ -96,6 +177,7 @@ func cases(database: db.Database*) -> !:
     n += try git.encode_pack(objects[..<1], wire[n..])
     assert(try repositories.receive_pack(database, "alice", "alice", "push", wire[..<n]) == 2)
     try expect(database, "refs/heads/main", next)
+    try fetch_cases(database, next, id)
     # New ref to existing data still carries a valid empty pack.
     n = try append(wire, 0, zero, id, "refs/tags/existing", "report-status", true)
     n += try git.encode_packet(git.PacketKind.flush, b"", wire[n..])

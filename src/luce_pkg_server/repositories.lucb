@@ -497,6 +497,17 @@ struct Graph:
     var edges: usize
     var probes: usize
 
+    mutating func contains(id: const u8[]) -> bool!:
+        var bucket: usize = 0
+        for byte in id: bucket = (bucket * 31 + (usize)byte) & 8191
+        while true:
+            self.probes += 1
+            if self.probes > 16777216: error(prism.invalid, "graph lookup work limit exceeded")
+            let slot = self.slots[bucket]
+            if slot == 0: return false
+            if same(self.nodes[slot - 1].id, id): return true
+            bucket = (bucket + 1) & 8191
+
     mutating func add(id: const u8[], kind: u8) -> !:
         if id.length != 20 or zero_id(id): error(prism.invalid, "invalid graph identity")
         self.edges += 1
@@ -555,6 +566,113 @@ struct Graph:
                 let tag = try git.decode_tag(object.payload)
                 try self.add_hex(tag.object, try kind_code(tag.kind))
             at += 1
+
+struct FetchLease:
+    var value: interop.Reference[prism.Value]?
+
+func release_fetch_leases(leases: FetchLease[], count: usize*):
+    for i in 0..<*count:
+        if let lease = leases[i].value: lease.release()
+
+## Native upload-pack core. Discard output on error. Principal is verified by
+## transport. Only advertised ref tips may be requested; no arbitrary-ID reads.
+## No shallow/filter/side-band/multi-ACK negotiation is advertised by this core.
+pub func upload_pack(database: db.Database*, principal: str, owner: str, name: str, input: const u8[], output: u8[]) -> usize!:
+    var path_buffer: u8[192]
+    let path = try repo_path(principal, owner, name, path_buffer)
+    let snapshot = try database.snapshot()
+    defer snapshot.release()
+    let session = snapshot.value()
+    try require_owner(session, path, principal)
+    let request = try git.decode_fetch(input)
+    var start: usize = 0
+    for i in 0..<(request.capabilities.length + 1 if request.capabilities.length > 0 else 0):
+        if i != request.capabilities.length and request.capabilities.bytes[i] != ' ': continue
+        let token = (str)request.capabilities.bytes[start..<i]
+        if token.length != 0 and token != "ofs-delta" and token != "no-progress" and token != "object-format=sha1" and not strings.starts_with(token, "agent="):
+            error(prism.invalid, "unsupported fetch capability")
+        start = i + 1
+    if request.wants == 0: return 0
+    let nodes = try alloc GraphNode[4096] in memory.heap
+    defer free(nodes) in memory.heap
+    let slots = try alloc usize[8192] in memory.heap
+    defer free(slots) in memory.heap
+    let common_nodes = try alloc GraphNode[4096] in memory.heap
+    defer free(common_nodes) in memory.heap
+    let common_slots = try alloc usize[8192] in memory.heap
+    defer free(common_slots) in memory.heap
+    for i in 0..<slots.length:
+        slots[i] = 0
+        common_slots[i] = 0
+    var wanted = Graph(nodes = nodes, slots = slots)
+    var common = Graph(nodes = common_nodes, slots = common_slots)
+    var ids: u8[20480]
+    var authorized: bool[1024]
+    for i in 0..<request.wants:
+        try git.decode_id(try request.want(i), ids[i * 20..<i * 20 + 20])
+    var root_buffer: u8[208]
+    let root = try join([path, "/refs"], root_buffer)
+    let children = try session.children(root)
+    defer children.release()
+    if children.value().count() > max_refs: error(prism.invalid, "stored ref count exceeds limit")
+    for i in 0..<children.value().count():
+        let child = try children.value().at(i)
+        let label = try session.get(child, "name")
+        defer label.release()
+        let ref_name = try label.value().text_at()
+        var location_buffer: u8[2304]
+        if try ref_path(root, ref_name, location_buffer) != child: error(prism.invalid, "stored ref path mismatch")
+        let ref = try read_ref(session, child, ref_name)
+        defer ref.release()
+        for j in 0..<request.wants:
+            if same(ref.value().bytes(), ids[j * 20..<j * 20 + 20]): authorized[j] = true
+    for i in 0..<request.wants:
+        if not authorized[i]: error(prism.invalid, "fetch want was not advertised")
+        try wanted.add(ids[i * 20..<i * 20 + 20], 0)
+    try wanted.validate(session, path)
+    var acknowledged: u8[20]
+    var have_common = false
+    for i in 0..<request.haves:
+        var id: u8[20]
+        try git.decode_id(try request.have(i), id)
+        # Only commits in the wanted closure are negotiation bases. Unknown or
+        # unrelated haves reveal nothing about other stored objects.
+        if not try wanted.contains(id): continue
+        let value = try checked_object(session, path, id)
+        defer value.release()
+        if (try git.decode_object(value.value().bytes())).kind != "commit": continue
+        try common.add(id, 3)
+        for j in 0..<(usize)20: acknowledged[j] = id[j]
+        have_common = true
+    var used: usize = 0
+    if have_common:
+        var encoded: u8[40]
+        discard(try git.hex_id(acknowledged, encoded))
+        var buffer: u8[64]
+        let line = try format(buffer, f"ACK {(str)encoded}\n")
+        used = try git.encode_packet(git.PacketKind.data, line.bytes, output)
+    else:
+        used = try git.encode_packet(git.PacketKind.data, b"NAK\n", output)
+    if not request.done: return used
+    try common.validate(session, path)
+    let objects = try alloc git.Object[4096] in memory.heap
+    defer free(objects) in memory.heap
+    let leases = try alloc FetchLease[4096] in memory.heap
+    defer free(leases) in memory.heap
+    var count: usize = 0
+    defer release_fetch_leases(leases, &count)
+    var total: usize = 0
+    for i in 0..<wanted.count:
+        if try common.contains(wanted.nodes[i].id): continue
+        let value = try checked_object(session, path, wanted.nodes[i].id)
+        leases[count] = FetchLease(value = value)
+        count += 1
+        let object = try git.decode_object(value.value().bytes())
+        if object.payload.length > 67108864 - total: error(prism.invalid, "fetch object byte limit exceeded")
+        total += object.payload.length
+        objects[count - 1] = object
+    used += try git.encode_pack(objects[..<count], output[used..])
+    return used
 
 ## Atomic CAS of every ref in the batch, including cross-ref prefix checks.
 ## Shared guard writes serialize competing batches, since Prism detects write
