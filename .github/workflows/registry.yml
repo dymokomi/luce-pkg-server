@@ -21,7 +21,7 @@ jobs:
         working-directory: luce-pkg-server
         shell: bash
         run: |
-          for entry in BASE:luce-base LUCE:luce SERVER:luce-server DB:luce-db AUTH:luce-auth CRYPTO:luce-crypto PRISM:luce-prism TLS:luce-tls JSON:luce-json; do
+          for entry in BASE:luce-base LUCE:luce SERVER:luce-server DB:luce-db AUTH:luce-auth CRYPTO:luce-crypto PRISM:luce-prism TLS:luce-tls JSON:luce-json GIT:luce-git COMPRESS:luce-compress; do
             pin="${entry%%:*}"
             repo="${entry#*:}"
             revision=$(cat "bootstrap/$pin")
@@ -49,6 +49,20 @@ jobs:
         run: |
           set -o pipefail
           python3 tests/sanitize_registry.py --base build/toolchain/luce-base 2>&1 | tee build/sanitize-ci.log
+      - name: Repository persistence, ownership and worker races
+        working-directory: luce-pkg-server
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tests/run_repositories.py 2>&1 | tee build/repositories-ci.log
+          python3 tests/run_repositories.py --mode sanitize 2>&1 | tee build/repositories-sanitize-ci.log
+      - name: Repository native heap cleanup
+        if: runner.os == 'macOS'
+        working-directory: luce-pkg-server
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tests/run_repositories.py --mode native0 --heap 2>&1 | tee build/repositories-heap-ci.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -56,3 +70,6 @@ jobs:
           path: |
             luce-pkg-server/build/accounts-ci.log
             luce-pkg-server/build/sanitize-ci.log
+            luce-pkg-server/build/repositories-ci.log
+            luce-pkg-server/build/repositories-sanitize-ci.log
+            luce-pkg-server/build/repositories-heap-ci.log

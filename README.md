@@ -17,6 +17,35 @@ It binds `127.0.0.1` only. This is not `pkg.luciaos.com`, Git hosting, signed
 releases or real credentials. A green roadmap check is not an authentication,
 storage, cryptography or deployment gate.
 
+The internal `repositories` export adds private repository creation and bounded
+Git object persistence over `luce-db`/Prism. Call `initialize` on the database owner
+before starting workers; each worker uses its own database connection. Every API
+principal must come from verified authentication, **not** request JSON. Owners
+must already have an account. Package names are lowercase ASCII letters/digits,
+underscores or hyphens (1–64 bytes, first character alphanumeric); lossless hex
+storage keys avoid Prism path restrictions and name aliases.
+
+Objects are canonical uncompressed Git envelopes, limited to 1 MiB each. Exact
+duplicates are idempotent, differing bytes at the same ID conflict, and reads
+recheck framing and Git identity. Successful writes include the database bake
+barrier; an error can still mean a commit happened before its barrier failed.
+Callers must reconcile ambiguous outcomes, not assume rollback. Returned Prism
+values are owned and must be released. These APIs are not exposed over HTTP yet.
+This is **not** SHA-1 collision-attack protection, commit/tree semantic validation,
+graph reachability, refs, Git push/pull, publisher authorization or signed releases.
+Malformed semantic contents can be stored and must not be advertised as a valid
+Git history. Storage corruption tests deliberately modify disposable raw DB data.
+
+```sh
+python3 tools/bootstrap_registry.py
+python3 tests/run_repositories.py
+python3 tests/run_repositories.py --mode sanitize
+```
+
+These tests cover fresh-process reopen, local/IPC reads and writes, concurrent
+duplicate creation through worker-local clients, ownership rejection, exact 1 MiB
+binary objects, name/path boundaries, idempotence and persisted-content tampering.
+
 ## End-to-end goal
 
 1. Register the owner's `dymokomi` account at `https://pkg.luciaos.com` through

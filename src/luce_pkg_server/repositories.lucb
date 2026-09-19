@@ -1,0 +1,148 @@
+## Internal repository storage. Principal MUST come from verified authentication,
+## never from a request field. No HTTP exposure, refs or Git graph validation yet.
+import db
+import prism
+import interop
+import git
+
+pub let max_object_bytes: usize = 1048576
+
+func valid_owner(value: str) -> bool:
+    if value.length == 0 or value.length > 32: return false
+    for byte in value.bytes:
+        if not ((byte >= 'a' and byte <= 'z') or (byte >= '0' and byte <= '9') or byte == '_'): return false
+    return true
+
+pub func valid_name(value: str) -> bool:
+    if value.length == 0 or value.length > 64: return false
+    for i in 0..<value.length:
+        let byte = value.bytes[i]
+        let alnum = (byte >= 'a' and byte <= 'z') or (byte >= '0' and byte <= '9')
+        if not alnum and (i == 0 or (byte != '_' and byte != '-')): return false
+    return true
+
+func join(parts: const str[], output: u8[]) -> str!:
+    var at: usize = 0
+    for part in parts:
+        if part.length > output.length - at: error(prism.invalid, "repository path too long")
+        for byte in part.bytes:
+            output[at] = byte
+            at += 1
+    return (str)output[..<at]
+
+func repo_path(principal: str, owner: str, name: str, output: u8[]) -> str!:
+    if not valid_owner(owner) or not valid_name(name) or principal != owner:
+        error(prism.invalid, "invalid repository identity or name")
+    # Prism names are identifiers, whereas package names may contain hyphens.
+    # Encode every byte, rather than lossy escaping that could alias two names.
+    let digits = b"0123456789abcdef"
+    var encoded_name: u8[128]
+    for i in 0..<name.length:
+        encoded_name[i * 2] = digits[(usize)(name.bytes[i] >> 4)]
+        encoded_name[i * 2 + 1] = digits[(usize)(name.bytes[i] & 15)]
+    return try join(["/repositories/", owner, "/", (str)encoded_name[..<name.length * 2]], output)
+
+func same(left: const u8[], right: const u8[]) -> bool:
+    if left.length != right.length: return false
+    for i in 0..<left.length:
+        if left[i] != right[i]: return false
+    return true
+
+func require_owner(session: prism.Session*, path: str, principal: str) -> !:
+    let value = try session.get(path, "owner")
+    defer value.release()
+    if try value.value().text_at() != principal:
+        error(prism.invalid, "repository owner mismatch")
+
+## Invoke once on the database owner before starting concurrent workers.
+pub func initialize(database: db.Database*) -> !:
+    let tx = try database.begin()
+    defer tx.release()
+    if try tx.value().contains("/repositories"): return
+    try tx.value().add("/repositories", "directory")
+    discard(try tx.value().commit(wait_ms = 1000))
+    discard(try database.bake(wait_ms = 1000))
+
+## Creates a private repository for an existing account. Duplicate creation is a
+## conflict, never replacement. A concurrency conflict must be retried by caller.
+pub func create(database: db.Database*, principal: str, name: str) -> !:
+    var path_buffer: u8[192]
+    let path = try repo_path(principal, principal, name, path_buffer)
+    var user_buffer: u8[64]
+    let user = try join(["/users/", principal], user_buffer)
+    var owner_buffer: u8[64]
+    let owner_path = try join(["/repositories/", principal], owner_buffer)
+    var objects_buffer: u8[208]
+    let objects_path = try join([path, "/objects"], objects_buffer)
+    let tx = try database.begin()
+    defer tx.release()
+    if not try tx.value().contains(user): error(prism.invalid, "repository account does not exist")
+    if not try tx.value().contains("/repositories"): error(prism.invalid, "repository storage is not initialized")
+    if try tx.value().contains(path): error(prism.conflict, "repository already exists")
+    if not try tx.value().contains(owner_path): try tx.value().add(owner_path, "directory")
+    try tx.value().add(path, "repository")
+    try tx.value().add(objects_path, "directory")
+    let owner = try prism.Value.text(principal)
+    defer owner.release()
+    try tx.value().set(path, "owner", owner)
+    let label = try prism.Value.text(name)
+    defer label.release()
+    try tx.value().set(path, "name", label)
+    discard(try tx.value().commit(wait_ms = 1000))
+    discard(try database.bake(wait_ms = 1000))
+
+func object_path(path: str, id: const u8[], output: u8[]) -> str!:
+    var encoded_id: u8[40]
+    discard(try git.hex_id(id, encoded_id))
+    return try join([path, "/objects/", (str)encoded_id], output)
+
+## Store one canonical uncompressed loose-object envelope. Content-addressed,
+## idempotent only for byte-identical content. Writes id only after success.
+## SHA-1 is Git identity, NOT collision-attack detection or release authenticity.
+pub func put_object(database: db.Database*, principal: str, owner: str, name: str, wire: const u8[], id: u8[]) -> !:
+    var path_buffer: u8[192]
+    let path = try repo_path(principal, owner, name, path_buffer)
+    if wire.length > max_object_bytes or id.length != 20:
+        error(prism.invalid, "invalid repository object size or id output")
+    let object = try git.decode_object(wire)
+    var digest: u8[20]
+    discard(try git.hash_object(object.kind, object.payload, digest))
+    var object_buffer: u8[256]
+    let location = try object_path(path, digest, object_buffer)
+    let tx = try database.begin()
+    defer tx.release()
+    try require_owner(tx.value(), path, principal)
+    if try tx.value().contains(location):
+        let existing = try tx.value().get(location, "wire")
+        defer existing.release()
+        if not same(existing.value().bytes(), wire): error(prism.conflict, "Git object identity collision")
+    else:
+        let value = try prism.Value.array(prism.DType.uint8, [(i64)wire.length], wire)
+        defer value.release()
+        try tx.value().add(location, "git-object")
+        try tx.value().set(location, "wire", value)
+        discard(try tx.value().commit(wait_ms = 1000))
+    # Also bake idempotent retries: a previous commit may have succeeded before
+    # its bake failed. Never report success without a completed durability barrier.
+    discard(try database.bake(wait_ms = 1000))
+    for i in 0..<(usize)20: id[i] = digest[i]
+
+## Returns an owning byte-array value; caller releases it. Validate persisted
+## framing and requested ID before returning anything to a network consumer.
+pub func get_object(database: db.Database*, principal: str, owner: str, name: str, id: const u8[]) -> interop.Reference[prism.Value]!:
+    var path_buffer: u8[192]
+    let path = try repo_path(principal, owner, name, path_buffer)
+    var object_buffer: u8[256]
+    let location = try object_path(path, id, object_buffer)
+    let snapshot = try database.snapshot()
+    defer snapshot.release()
+    try require_owner(snapshot.value(), path, principal)
+    let value = try snapshot.value().get(location, "wire")
+    errdefer value.release()
+    let wire = value.value().bytes()
+    if wire.length > max_object_bytes: error(prism.invalid, "stored Git object exceeds limit")
+    let object = try git.decode_object(wire)
+    var digest: u8[20]
+    discard(try git.hash_object(object.kind, object.payload, digest))
+    if not same(digest, id): error(prism.invalid, "stored Git object identity mismatch")
+    return value

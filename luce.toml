@@ -4,6 +4,7 @@ source = "src"
 
 [exports]
 registry = "luce_pkg_server.registry"
+repositories = "luce_pkg_server.repositories"
 
 [dependencies]
 luce_server = "../luce-server"
@@ -11,3 +12,4 @@ luce_db = "../luce-db"
 luce_auth = "../luce-auth"
 luce_json = "../luce-json"
 luce_prism = "../luce-prism"
+luce_git = "../luce-git"

@@ -1,0 +1,228 @@
+import repositories
+import db
+import auth
+import prism
+import git
+import memory
+import thread
+
+func setup(database: db.Database*) -> !:
+    let authority = try auth.Authority.attach(try database.store())
+    defer authority.release()
+    try authority.value().bootstrap("alice", "disposable-test-password")
+    try repositories.initialize(database)
+    try repositories.initialize(database)
+
+func wire_for(kind: str, output: u8[]) -> usize!:
+    return try git.encode_object(kind, b"binary\0payload\n", output)
+
+func boundaries(database: db.Database*, write: bool) -> !:
+    var name: u8[64]
+    for i in 0..<(usize)64: name[i] = 'a'
+    if write: try repositories.create(database, "alice", (str)name)
+    let payload = try alloc u8[repositories.max_object_bytes - 13] in memory.heap
+    defer free(payload) in memory.heap
+    for i in 0..<payload.length: payload[i] = (u8)(i % 256)
+    let wire = try alloc u8[repositories.max_object_bytes] in memory.heap
+    defer free(wire) in memory.heap
+    let count = try git.encode_object("blob", payload, wire)
+    assert(count == repositories.max_object_bytes)
+    var id: u8[20]
+    discard(try git.hash_blob(payload, id))
+    if write:
+        var result: u8[20]
+        try repositories.put_object(database, "alice", "alice", (str)name, wire, result)
+        for i in 0..<(usize)20: assert(result[i] == id[i])
+    let value = try repositories.get_object(database, "alice", "alice", (str)name, id)
+    defer value.release()
+    assert(value.value().bytes().length == wire.length)
+    for i in 0..<wire.length: assert(value.value().bytes()[i] == wire[i])
+
+func check(database: db.Database*, write: bool) -> !:
+    if write:
+        try repositories.create(database, "alice", "test-package")
+        try repositories.create(database, "alice", "empty")
+    for kind in ["blob", "tree", "commit", "tag"]:
+        var wire: u8[128]
+        let n = try wire_for(kind, wire)
+        var id: u8[20]
+        discard(try git.hash_object(kind, b"binary\0payload\n", id))
+        if write:
+            var result: u8[20]
+            try repositories.put_object(database, "alice", "alice", "test-package", wire[..<n], result)
+            let before = try database.snapshot()
+            defer before.release()
+            for i in 0..<(usize)20: assert(result[i] == id[i])
+            try repositories.put_object(database, "alice", "alice", "test-package", wire[..<n], result)
+            let after = try database.snapshot()
+            defer after.release()
+            assert(try before.value().revision() == try after.value().revision())
+        let value = try repositories.get_object(database, "alice", "alice", "test-package", id)
+        defer value.release()
+        let bytes = value.value().bytes()
+        assert(bytes.length == n)
+        for i in 0..<n: assert(bytes[i] == wire[i])
+        var missing = false
+        let absent = repositories.get_object(database, "alice", "alice", "empty", id) catch failure:
+            assert(failure.code == prism.missing)
+            missing = true
+            continue
+        absent.release()
+        assert(missing)
+    try boundaries(database, write)
+
+func reject_create(database: db.Database*, owner: str, name: str, expected: ErrorCode) -> !:
+    var rejected = false
+    repositories.create(database, owner, name) catch failure:
+        assert(failure.code == expected)
+        rejected = true
+    assert(rejected)
+
+func negative(database: db.Database*) -> !:
+    try reject_create(database, "alice", "test-package", prism.conflict)
+    try reject_create(database, "nobody", "test-package", prism.invalid)
+    for name in ["", ".", "..", "../escape", "bad/name", "UPPER", "-leading", "x.git", "x y", "x\\y", "x\0y"]:
+        assert(not repositories.valid_name(name))
+        try reject_create(database, "alice", name, prism.invalid)
+    for owner in ["", "../alice", "Alice", "alice/other"]:
+        try reject_create(database, owner, "safe", prism.invalid)
+    var long: u8[65]
+    for i in 0..<(usize)65: long[i] = 'a'
+    assert(repositories.valid_name((str)long[..<64]))
+    try reject_create(database, "alice", (str)long, prism.invalid)
+    var id: u8[20]
+    for i in 0..<(usize)20: id[i] = 0x5a
+    for wire in [b"", b"blob 01\0x", b"bad 1\0x", b"blob 2\0x", b"blob 1\0xx"]:
+        var rejected = false
+        repositories.put_object(database, "alice", "alice", "test-package", wire, id) catch failure:
+            rejected = true
+        assert(rejected)
+        for byte in id: assert(byte == 0x5a)
+    var denied = false
+    repositories.put_object(database, "mallory", "alice", "test-package", b"blob 1\0x", id) catch failure:
+        assert(failure.code == prism.invalid)
+        denied = true
+    assert(denied)
+    var missing = false
+    repositories.put_object(database, "alice", "alice", "missing", b"blob 1\0x", id) catch failure:
+        assert(failure.code == prism.missing)
+        missing = true
+    assert(missing)
+    let oversize = try alloc u8[repositories.max_object_bytes + 1] in memory.heap
+    defer free(oversize) in memory.heap
+    var bounded = false
+    repositories.put_object(database, "alice", "alice", "test-package", oversize, id) catch failure:
+        assert(failure.code == prism.invalid)
+        bounded = true
+    assert(bounded)
+    var short_id: u8[19]
+    var short_rejected = false
+    repositories.put_object(database, "alice", "alice", "test-package", b"blob 1\0x", short_id) catch failure:
+        assert(failure.code == prism.invalid)
+        short_rejected = true
+    assert(short_rejected)
+    discard(try git.hash_object("blob", b"binary\0payload\n", id))
+    var read_denied = false
+    let wrong = repositories.get_object(database, "mallory", "alice", "test-package", id) catch failure:
+        assert(failure.code == prism.invalid)
+        read_denied = true
+        return
+    wrong.release()
+    assert(read_denied)
+
+## Deliberately corrupt only a disposable fixture via privileged raw DB access.
+func corruption(database: db.Database*) -> !:
+    var id: u8[20]
+    try repositories.put_object(database, "alice", "alice", "test-package", b"blob 1\0x", id)
+    var encoded_id: u8[40]
+    discard(try git.hex_id(id, encoded_id))
+    let prefix = b"/repositories/alice/746573742d7061636b616765/objects/"
+    var path: u8[128]
+    for i in 0..<prefix.length: path[i] = prefix[i]
+    for i in 0..<(usize)40: path[prefix.length + i] = encoded_id[i]
+    let tx = try database.begin()
+    defer tx.release()
+    let poison = try prism.Value.array(prism.DType.uint8, [8], b"blob 1\0y")
+    defer poison.release()
+    try tx.value().set((str)path[..<prefix.length + 40], "wire", poison)
+    discard(try tx.value().commit(wait_ms = 1000))
+    discard(try database.bake(wait_ms = 1000))
+    var conflict = false
+    repositories.put_object(database, "alice", "alice", "test-package", b"blob 1\0x", id) catch failure:
+        assert(failure.code == prism.conflict)
+        conflict = true
+    assert(conflict)
+    var rejected = false
+    let value = repositories.get_object(database, "alice", "alice", "test-package", id) catch failure:
+        assert(failure.code == prism.invalid)
+        rejected = true
+        return
+    value.release()
+    assert(rejected)
+
+var socket_buffer: u8[512]
+var socket_length: usize
+var ready: @u64
+var start: @u64
+var successes: @u64
+var conflicts: @u64
+var unexpected: @u64
+
+func race_attempt() -> !:
+    let database = try db.Database.connect((str)socket_buffer[..<socket_length], "test-store-token")
+    defer database.release()
+    while start.load(.acquire) == 0: thread.sleep(1)
+    repositories.create(database.value(), "alice", "race") catch failure:
+        if failure.code == prism.conflict: discard(conflicts.add(1, .relaxed))
+        else:
+            print(failure.message)
+            discard(unexpected.add(1, .relaxed))
+        return
+    discard(successes.add(1, .relaxed))
+
+func race_worker(raw: void*?):
+    discard(raw)
+    discard(ready.add(1, .release))
+    race_attempt() catch failure:
+        print(failure.message)
+        discard(unexpected.add(1, .relaxed))
+
+func race(database: db.Database*) -> !:
+    try database.listen()
+    var first = try thread.spawn(race_worker, none, name = "repo-one")
+    var second = try thread.spawn(race_worker, none, name = "repo-two")
+    while ready.load(.acquire) != 2: thread.sleep(1)
+    start.store(1, .release)
+    try first.join()
+    try second.join()
+    assert(successes.load(.acquire) == 1)
+    assert(conflicts.load(.acquire) == 1 and unexpected.load(.acquire) == 0)
+
+pub func main(arguments: str[]) -> i32!:
+    assert(arguments.length == 3)
+    let database = try db.Database.open(arguments[1], "test-store-token")
+    defer database.release()
+    let path = arguments[1]
+    assert(path.length + 5 <= socket_buffer.length)
+    for i in 0..<path.length: socket_buffer[i] = path.bytes[i]
+    for i in 0..<(usize)5: socket_buffer[path.length + i] = b".sock"[i]
+    socket_length = path.length + 5
+    if arguments[2] == "read":
+        try check(database.value(), false)
+    else:
+        try setup(database.value())
+        if arguments[2] == "race":
+            try race(database.value())
+        elif arguments[2] == "ipc":
+            try database.value().listen()
+            let client = try db.Database.connect((str)socket_buffer[..<socket_length], "test-store-token")
+            defer client.release()
+            try check(client.value(), true)
+            try negative(client.value())
+            try corruption(client.value())
+        else:
+            try check(database.value(), true)
+            try negative(database.value())
+            try corruption(database.value())
+    print("PASS repository storage")
+    return 0
