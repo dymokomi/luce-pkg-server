@@ -44,7 +44,8 @@ Decided by the owner:
 - Application signatures are ML-DSA-65; local vaults are Argon2id +
   XChaCha20-Poly1305. See [APPLICATION_CRYPTO_PROPOSAL.md](APPLICATION_CRYPTO_PROPOSAL.md).
 - v1 manifests remain compiler-compatible `luce.toml`. YAML is not a v1 target.
-  The lockfile is `luce.lock` (TOML, schema_version = 1). Compilers do not read it.
+  The lockfile is `luc.lock` (TOML, schema_version = 1; owner naming clarification
+  September 19, 2026). Compilers do not read it.
   See [CONTRACTS.md](CONTRACTS.md).
 
 Current implementation constraints:
@@ -69,7 +70,7 @@ Still to design/review, so M0 is not complete:
   encodings beyond the LID1 invite/vault wrap; exact ML-DSA-65 release/root
   signature profile (`LRS1`) and freshness/rotation policy. Algorithm families
   and LID1 header layouts are chosen; remaining record kinds are not all implemented.
-- Shared normalized lock contents on top of frozen `luce.lock` TOML. First-slice
+- Shared normalized lock contents on top of frozen `luc.lock` TOML. First-slice
   `luce-pkg` encodes origin/name/version/digest/compiler; hostile-input and
   archive/cache work remain.
 - Git packs/refs/Smart HTTP, SHAttered-prefix rejection in the object store, and

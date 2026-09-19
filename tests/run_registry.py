@@ -18,6 +18,8 @@ def main():
     if not args.base.is_file():
         raise SystemExit("Need a pinned luce-base at build/toolchain/luce-base")
     environment = dict(os.environ, LUCE_BASE=str(args.base.resolve()))
+    environment.setdefault("LUCE_STD", str(ROOT.parent / "luce-base/src/std"))
+    environment.setdefault("LUCE_CACHE", str(ROOT / "build/cache"))
     def run(command):
         subprocess.run([str(a) for a in command], cwd=ROOT, env=environment, check=True, timeout=180)
     for mode, flags in MODES.items():
@@ -26,7 +28,8 @@ def main():
         output.mkdir(parents=True, exist_ok=True)
         print(f"MODE {mode}", flush=True)
         run([args.base.resolve(), "build", ROOT / "src/luce_pkg_server/registry.lucb", *flags, "-o", output / "registry"])
-        run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/check_registry.py"), output / "registry"])
+        run([args.base.resolve(), "build", ROOT / "tests/account_fixture.lucb", *flags, "-o", output / "account-fixture"])
+        run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/check_accounts.py"), output / "registry", output / "account-fixture"])
         print(f"PASS {mode}", flush=True)
     print("PASS all selected compiler modes", flush=True)
 

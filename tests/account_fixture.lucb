@@ -1,0 +1,15 @@
+## Disposable integration-test credentials only; not an administrative CLI.
+import auth
+
+pub func main(arguments: str[]) -> i32!:
+    assert(arguments.length == 2)
+    let authority = try auth.Authority.open(arguments[1], "integration-store-token")
+    defer authority.release()
+    try authority.value().bootstrap("testadmin", "fixture-password")
+    let invite = try authority.value().invite()
+    defer invite.release()
+    print(try invite.value().text_at())
+    let raced = try authority.value().invite()
+    defer raced.release()
+    print(try raced.value().text_at())
+    return 0

@@ -1,94 +1,117 @@
-## Local invited-account HTTP API. Loopback only. X-Forwarded-For is never identity.
+## Loopback registry API. Reverse-proxy headers never establish identity.
 import http
 import interop
 import db
 import auth
 import ownership
+import json
+import os
+import c
+import strings
 
 func failed(code: ErrorCode, message: str) -> interop.Outcome[interop.Reference[http.Response]]:
     let copied = interop.copy_text(message) catch failure:
-        return interop.Outcome[interop.Reference[http.Response]].failure(failure.code, interop.Owned[str]("error text allocation failed"))
+        return interop.Outcome[interop.Reference[http.Response]].failure(failure.code, interop.Owned[str]("internal error"))
     return interop.Outcome[interop.Reference[http.Response]].failure(code, copied)
 
 func reply(text: str, status: i64 = 200) -> interop.Outcome[interop.Reference[http.Response]]:
     let value = http.Response.bytes(text.bytes, "text/plain; charset=utf-8", status) catch failure:
-        return failed(failure.code, failure.message)
+        return failed(failure.code, "internal error")
+    value.value().header("Cache-Control", "no-store") catch failure:
+        value.release()
+        return failed(failure.code, "internal error")
     return interop.Outcome[interop.Reference[http.Response]].success(interop.Owned[interop.Reference[http.Response]](value, &value.owner.header))
 
-func hex32(digest: const u8[], out: u8[]):
-    let digits = b"0123456789abcdef"
-    for i in 0..<(usize)32:
-        out[i * 2] = digits[(usize)(digest[i] >> 4)]
-        out[i * 2 + 1] = digits[(usize)(digest[i] & 15)]
+func valid_token(token: str) -> bool:
+    if token.length != 32: return false
+    for byte in token.bytes:
+        if not ((byte >= '0' and byte <= '9') or (byte >= 'a' and byte <= 'f')): return false
+    return true
+
+func bearer(request: const http.Request*) -> str!:
+    let header = (try request.header("Authorization")) else error(auth.invalid, "authentication required")
+    if not strings.starts_with(header, "Bearer "): error(auth.invalid, "authentication required")
+    let token = (str)header.bytes[7..]
+    if not valid_token(token): error(auth.invalid, "authentication required")
+    return token
+
+func field(root: json.View, name: str) -> str!:
+    let value = root.member(name) else error(auth.invalid, "missing field")
+    return value.text() else error(auth.invalid, "string field required")
 
 struct App:
-    var database: db.Database
+    var database: interop.Reference[db.Database]
+    var authority: interop.Reference[auth.Authority]
 
     mutating func close():
-        self.database.close()
+        self.authority.release()
+        self.database.release()
 
     func health(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
         discard(view)
         return reply("ok")
 
     func identity(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
-        let request = view.value()
-        let authorization = request.header("Authorization") catch failure: return failed(failure.code, failure.message)
-        let forwarded = request.header("X-Forwarded-For") catch failure: return failed(failure.code, failure.message)
-        let git = request.header("Git-Protocol") catch failure: return failed(failure.code, failure.message)
-        var text: u8[512]
-        var n: usize
-        let auth_text = authorization else ""
-        let forward_text = forwarded else ""
-        let git_text = git else ""
-        let prefix = "identity=untrusted-proxy\nauthorization="
-        for i in 0..<prefix.length:
-            text[n] = prefix.bytes[i]
-            n += 1
-        for i in 0..<auth_text.length:
-            text[n] = auth_text.bytes[i]
-            n += 1
-        let mid = "\nforwarded="
-        for i in 0..<mid.length:
-            text[n] = mid.bytes[i]
-            n += 1
-        for i in 0..<forward_text.length:
-            text[n] = forward_text.bytes[i]
-            n += 1
-        let git_prefix = "\ngit-protocol="
-        for i in 0..<git_prefix.length:
-            text[n] = git_prefix.bytes[i]
-            n += 1
-        for i in 0..<git_text.length:
-            text[n] = git_text.bytes[i]
-            n += 1
-        return reply((str)text[..<n])
+        let token = bearer(view.value()) catch: return reply("unauthorized", 401)
+        let who = self.authority.value().verify(token) catch: return reply("unauthorized", 401)
+        defer who.release()
+        let name = who.value().text_at() catch: return reply("internal error", 500)
+        return reply(name)
 
-    mutating func redeem(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
-        let body = view.value().body() catch failure: return failed(failure.code, failure.message)
+    func redeem(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
+        let body = view.value().body() catch: return reply("invalid body", 400)
         defer body.release()
-        let payload = body.value().bytes(4096) catch failure: return failed(failure.code, failure.message)
-        let invite = auth.decode_invite(payload) catch failure: return reply("invalid-invite", 400)
-        var digest: u8[32]
-        discard(auth.token_digest(invite.code.bytes, digest) catch failure: return failed(failure.code, failure.message))
-        var key: u8[80]
-        let head = b"invite/"
-        for i in 0..<head.length: key[i] = head[i]
-        hex32(digest, key[7..<71])
-        let tx = self.database.begin() catch failure: return failed(failure.code, failure.message)
-        defer tx.release()
-        tx.value().insert((str)key[..<71], b"used") catch failure:
-            if failure.code == db.conflict: return reply("invite-used", 409)
-            return failed(failure.code, failure.message)
-        tx.value().commit() catch failure: return failed(failure.code, failure.message)
+        let payload = body.value().bytes(4096) catch: return reply("invalid body", 400)
+        let document = json.decode((str)payload, 4096) catch: return reply("invalid JSON", 400)
+        defer document.release()
+        let root = document.value().root()
+        if root.kind() != json.Kind.object or root.length() != 3: return reply("invalid fields", 400)
+        let code = field(root, "code") catch: return reply("invalid fields", 400)
+        let name = field(root, "name") catch: return reply("invalid fields", 400)
+        let password = field(root, "password") catch: return reply("invalid fields", 400)
+        if not valid_token(code): return reply("invalid invitation", 400)
+        self.authority.value().accept(code, name, password) catch failure:
+            if failure.code == auth.conflict: return reply("registration conflict", 409)
+            if failure.code == auth.invalid: return reply("invalid registration", 400)
+            return reply("registration failed", 503)
         return reply("registered", 201)
 
-pub let app_type: interop.Type[App] = interop.Type[App]("registry", App.close)
+    func login(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
+        let body = view.value().body() catch: return reply("invalid body", 400)
+        defer body.release()
+        let payload = body.value().bytes(4096) catch: return reply("invalid body", 400)
+        let document = json.decode((str)payload, 4096) catch: return reply("invalid JSON", 400)
+        defer document.release()
+        let root = document.value().root()
+        if root.kind() != json.Kind.object or root.length() != 2: return reply("invalid fields", 400)
+        let name = field(root, "name") catch: return reply("invalid fields", 400)
+        let password = field(root, "password") catch: return reply("invalid fields", 400)
+        let token = self.authority.value().login(name, password) catch: return reply("unauthorized", 401)
+        defer token.release()
+        let text = token.value().text_at() catch: return reply("internal error", 500)
+        return reply(text)
 
-func configure(data: str) -> interop.Outcome[http.Application]:
-    var opened = db.Database(data) catch failure: trap(failure.message)
-    opened.initialize_schema("schema", "registry") catch failure: trap(failure.message)
-    var native = new App(database = opened) catch failure: trap(failure.message)
+    func logout(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
+        let token = bearer(view.value()) catch: return reply("unauthorized", 401)
+        self.authority.value().revoke(token) catch: return reply("unauthorized", 401)
+        return reply("revoked")
+
+let app_type = interop.Type[App]("registry", App.close)
+
+func store_token() -> str!:
+    let token = os.env((c.str)"LUCE_REGISTRY_STORE_TOKEN") else error(auth.invalid, "LUCE_REGISTRY_STORE_TOKEN is required")
+    if token.length == 0: error(auth.invalid, "empty store token")
+    return token
+
+func configure(socket: str) -> interop.Outcome[http.Application]:
+    let database = db.Database.connect(socket, store_token() catch failure: trap(failure.message)) catch failure: trap(failure.message)
+    let authority = auth.Authority.attach(database.value().store() catch failure: trap(failure.message)) catch failure:
+        database.release()
+        trap(failure.message)
+    let native = new App(database = database, authority = authority) catch failure:
+        authority.release()
+        database.release()
+        trap(failure.message)
     let app = interop.Reference[App].adopt(native, app_type) catch failure: trap(failure.message)
     defer app.release()
     var router = http.Router() catch failure: trap(failure.message)
@@ -99,28 +122,43 @@ func configure(data: str) -> interop.Outcome[http.Application]:
     let identity = http.Handler.bind(app, App.identity) catch failure: trap(failure.message)
     defer identity.release()
     router.get("/v1/identity", identity) catch failure: trap(failure.message)
-    let redeem = http.Handler.bind_mutating(app, App.redeem) catch failure: trap(failure.message)
+    let redeem = http.Handler.bind(app, App.redeem) catch failure: trap(failure.message)
     defer redeem.release()
     router.post("/v1/invites/redeem", redeem) catch failure: trap(failure.message)
+    let login = http.Handler.bind(app, App.login) catch failure: trap(failure.message)
+    defer login.release()
+    router.post("/v1/sessions", login) catch failure: trap(failure.message)
+    let logout = http.Handler.bind(app, App.logout) catch failure: trap(failure.message)
+    defer logout.release()
+    router.post("/v1/sessions/revoke", logout) catch failure: trap(failure.message)
     let result = router.application() catch failure: trap(failure.message)
     return interop.Outcome[http.Application].success(interop.Owned[http.Application](result, result.owner))
 
-pub func main(arguments: str[]) -> i32!:
-    if arguments.length < 2: return 2
-    var port: i64
-    if arguments.length >= 3:
-        var i: usize
-        while i < arguments[2].length:
-            let c = arguments[2].bytes[i]
-            if c < '0' or c > '9': return 2
-            port = port * 10 + (i64)(c - '0')
-            i += 1
-    var options = http.ServerConfig(address = "127.0.0.1", port = port, network_workers = 1, application_workers = 1,
-        body_limit = 65536, memory_body_limit = 65536)
-    var server = try http.Server(options, interop.WorkerEntry[str, unit, unit].native(configure), arguments[1])
+func run(arguments: str[]) -> i32!:
+    if arguments.length != 3: return 2
+    var port: i64 = 0
+    for byte in arguments[2].bytes:
+        if byte < '0' or byte > '9': return 2
+        port = port * 10 + (i64)(byte - '0')
+        if port > 65535: return 2
+    if arguments[2].length == 0: return 2
+    let owner = try db.Database.open(arguments[1], try store_token())
+    defer owner.release()
+    let authority = try auth.Authority.attach(try owner.value().store())
+    defer authority.release()
+    try owner.value().listen()
+    var socket_buffer: u8[4096]
+    let socket = try format(socket_buffer, f"{arguments[1]}.sock")
+    var options = http.ServerConfig(address = "127.0.0.1", port = port, network_workers = 2, application_workers = 2,
+        body_limit = 4096, memory_body_limit = 4096)
+    var server = try http.Server(options, interop.WorkerEntry[str, unit, unit].native(configure), socket)
     defer server.close()
     try server.shutdown_on_signals()
     try server.start()
     print(f"READY {try server.port()}")
     try server.run()
-    return ownership.finish_run(0)
+    return 0
+
+pub func main(arguments: str[]) -> i32!:
+    let result = try run(arguments)
+    return ownership.finish_run(result)

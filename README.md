@@ -5,9 +5,14 @@ MIT OR Apache-2.0. Application composition will be Luce; database, authenticatio
 cryptography, Git and package internals will be Luce Base. The HTTP backend will
 sit behind the existing VPS HTTPS proxy.
 
-A loopback invited-account HTTP API now exists as a first slice: `/health`,
-`/v1/identity` (X-Forwarded-For is never identity; Authorization and
-Git-Protocol are preserved) and single-use `/v1/invites/redeem` on `luce-db`.
+A loopback invited-account HTTP API is under integration: `/health`,
+`/v1/identity` (verified bearer identity, never proxy-header identity),
+single-use `/v1/invites/redeem`, `/v1/sessions` and `/v1/sessions/revoke`.
+Two application workers use one Prism database owner through local IPC.
+The store token is required in `LUCE_REGISTRY_STORE_TOKEN`; it is not an HTTP
+administrator credential. There is no public bootstrap or invite-creation route.
+The disposable account fixture is for tests only. Password costs remain test-only;
+rate limits, expiry, account signatures and production credential policy are pending.
 It binds `127.0.0.1` only. This is not `pkg.luciaos.com`, Git hosting, signed
 releases or real credentials. A green roadmap check is not an authentication,
 storage, cryptography or deployment gate.
@@ -24,7 +29,7 @@ storage, cryptography or deployment gate.
    conflicting versions, interrupted operations, revocation and service restore.
 
 Repository creation, local demos and test accounts alone do not satisfy this goal.
-The owner selected a separate `luc` product, planned in `luce-cli`, instead of
+The owner selected the existing separate `luc` product in `luce-luc`, instead of
 requiring embedded compiler package commands. Language sources remain untouched;
 toolchain compatibility and real import/link/build tests remain required. See the
 [client decision](docs/CLI_DECISION.md). Deployment configuration and real key custody are reviewed

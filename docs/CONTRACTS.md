@@ -4,11 +4,20 @@ Owner decisions and inspections recorded 2026-09-16. These freeze filenames,
 encodings and operational boundaries. They do not complete independent review,
 real-credential custody or `pkg.luciaos.com` deployment.
 
+Owner confirmations, September 19, 2026: account and package-release signatures
+remain **ML-DSA-65**; password-protected local credential vaults use **Argon2id +
+XChaCha20-Poly1305**, implemented in Luce Base. No initial Ed25519 or AES-GCM
+substitution. These are application-crypto choices, not changes to HTTP/TLS.
+The replacement Prism-backed authority does not by itself implement the complete
+account-key/vault contract below; integration and verification remain required.
+
 ## Manifests and locks
 
 - Compilers continue to read **`luce.toml`**. YAML is not a v1 target.
-- The lockfile is **`luce.lock`**, TOML, `schema_version = 1`. Compilers do not
+- The lockfile is **`luc.lock`**, TOML, `schema_version = 1`. Compilers do not
   read it. Only `luc` / `luce-pkg` write and consume it.
+- Owner clarification, September 19, 2026: keep `luce.toml` + `luc.lock`.
+  This supersedes the earlier `luce.lock` filename; no YAML migration.
 - Dual `luce.toml` + `luce.yaml` in one project is an error, not a migration pair.
 - Lock entries bind registry origin, package coordinate, version, canonical
   source digest (SHA-256), Git object format/commit when sourced from Git,

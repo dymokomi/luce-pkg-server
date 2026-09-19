@@ -1,4 +1,4 @@
-name: Loopback registry API
+name: Loopback registry accounts
 on:
   push:
   pull_request:
@@ -12,63 +12,47 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-15]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
         with:
           path: luce-pkg-server
-      - name: Read pins
-        id: pins
+      - name: Check out exact registry dependencies
         working-directory: luce-pkg-server
+        shell: bash
         run: |
-          python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          profile = json.loads(Path('compiler-profiles/pinned-v1.json').read_text())
-          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
-              print('base=' + profile['base_source'], file=output)
-              print('luce=' + profile['luce_source'], file=output)
-          PY
-          echo "server=$(tr -d '\n' < bootstrap/SERVER)" >> "$GITHUB_OUTPUT"
-          echo "db=$(tr -d '\n' < bootstrap/DB)" >> "$GITHUB_OUTPUT"
-          echo "auth=$(tr -d '\n' < bootstrap/AUTH)" >> "$GITHUB_OUTPUT"
-          echo "crypto=$(tr -d '\n' < bootstrap/CRYPTO)" >> "$GITHUB_OUTPUT"
-      - uses: actions/checkout@v4
-        with:
-          repository: dymokomi/luce-base
-          ref: ${{ steps.pins.outputs.base }}
-          path: luce-base
-      - uses: actions/checkout@v4
-        with:
-          repository: dymokomi/luce
-          ref: ${{ steps.pins.outputs.luce }}
-          path: luce
-      - uses: actions/checkout@v4
-        with:
-          repository: dymokomi/luce-server
-          ref: ${{ steps.pins.outputs.server }}
-          path: luce-server
-      - uses: actions/checkout@v4
-        with:
-          repository: dymokomi/luce-db
-          ref: ${{ steps.pins.outputs.db }}
-          path: luce-db
-      - uses: actions/checkout@v4
-        with:
-          repository: dymokomi/luce-auth
-          ref: ${{ steps.pins.outputs.auth }}
-          path: luce-auth
-      - uses: actions/checkout@v4
-        with:
-          repository: dymokomi/luce-crypto
-          ref: ${{ steps.pins.outputs.crypto }}
-          path: luce-crypto
+          for entry in BASE:luce-base LUCE:luce SERVER:luce-server DB:luce-db AUTH:luce-auth CRYPTO:luce-crypto PRISM:luce-prism TLS:luce-tls JSON:luce-json; do
+            pin="${entry%%:*}"
+            repo="${entry#*:}"
+            revision=$(cat "bootstrap/$pin")
+            [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || exit 1
+            git init "../$repo"
+            git -C "../$repo" remote add origin "https://github.com/dymokomi/$repo.git"
+            git -C "../$repo" fetch --depth 1 origin "$revision"
+            git -C "../$repo" checkout --detach FETCH_HEAD
+          done
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
-      - name: Bootstrap without language source changes
+      - name: Bootstrap registry dependencies without language changes
         working-directory: luce-pkg-server
-        run: python3 tools/bootstrap_compilers.py
-      - name: Registry API in all six modes
+        run: python3 tools/bootstrap_registry.py
+      - name: Registry accounts in all six modes
         working-directory: luce-pkg-server
-        run: python3 tests/run_registry.py
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tests/run_registry.py 2>&1 | tee build/accounts-ci.log
+      - name: Registry native memory safety
+        working-directory: luce-pkg-server
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 tests/sanitize_registry.py --base build/toolchain/luce-base 2>&1 | tee build/sanitize-ci.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: registry-${{ matrix.os }}
+          path: |
+            luce-pkg-server/build/accounts-ci.log
+            luce-pkg-server/build/sanitize-ci.log
