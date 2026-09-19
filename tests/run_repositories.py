@@ -16,6 +16,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base', type=Path, default=ROOT / 'build/toolchain/luce-base')
     parser.add_argument('--mode', choices=[*MODES, 'all', 'sanitize'], default='all')
+    parser.add_argument('--fixture', choices=['repositories', 'refs'], default='repositories')
     parser.add_argument('--heap', action='store_true', help='also require zero macOS leaks on separate stores')
     args = parser.parse_args()
     if args.heap and sys.platform != 'darwin':
@@ -23,7 +24,7 @@ def main():
     env = dict(os.environ)
     env.setdefault('LUCE_STD', str(ROOT.parent / 'luce-base/src/std'))
     env.setdefault('LUCE_CACHE', str(ROOT / 'build/cache'))
-    out = ROOT / 'build/repositories'
+    out = ROOT / 'build' / args.fixture
     out.mkdir(parents=True, exist_ok=True)
 
     def run(command):
@@ -41,13 +42,13 @@ def main():
             print(result.stdout, end='', flush=True)
             print(result.stderr, end='', file=sys.stderr, flush=True)
             result.check_returncode()
-            assert 'PASS repository storage' in result.stdout, 'instrumented fixture did not complete'
+            assert 'PASS repository ' in result.stdout, 'instrumented fixture did not complete'
             assert '0 leaks for 0 total leaked bytes' in result.stdout, result.stdout
 
     modes = MODES if args.mode == 'all' else {args.mode: MODES.get(args.mode, [])}
     for name, flags in modes.items():
         binary = out / name
-        source = ROOT / 'tests/repositories.lucb'
+        source = ROOT / 'tests' / f'{args.fixture}.lucb'
         if name == 'sanitize':
             generated = out / 'sanitize.c'
             runtime = ROOT.parent / 'luce-base/runtime'
@@ -67,6 +68,8 @@ def main():
             fixture(binary, Path(temporary) / 'ipc', 'read')
             for attempt in range(4):
                 fixture(binary, Path(temporary) / f'race-{attempt}', 'race')
+            if args.fixture == 'refs':
+                fixture(binary, Path(temporary) / 'limits', 'limits')
         print(f'PASS repository mode {name}', flush=True)
 
 

@@ -1,0 +1,244 @@
+import repositories
+import db
+import auth
+import prism
+import git
+import thread
+
+var zero: u8[20]
+var first_id: u8[20]
+var second_id: u8[20]
+var blob_id: u8[20]
+var socket_buffer: u8[512]
+var socket_length: usize
+
+func identify() -> !:
+    discard(try git.hash_object("commit", b"first fixture commit", first_id))
+    discard(try git.hash_object("commit", b"second fixture commit", second_id))
+    discard(try git.hash_blob(b"fixture blob", blob_id))
+
+func seed(database: db.Database*, name: str) -> !:
+    try repositories.create(database, "alice", name)
+    var wire: u8[128]
+    var result: u8[20]
+    var n = try git.encode_object("commit", b"first fixture commit", wire)
+    try repositories.put_object(database, "alice", "alice", name, wire[..<n], result)
+    n = try git.encode_object("commit", b"second fixture commit", wire)
+    try repositories.put_object(database, "alice", "alice", name, wire[..<n], result)
+    n = try git.encode_object("blob", b"fixture blob", wire)
+    try repositories.put_object(database, "alice", "alice", name, wire[..<n], result)
+    # Ensure the ref directory already exists; prefix race must conflict on the
+    # serialization guard, not incidentally on creation of the shared directory.
+    try repositories.update_refs(database, "alice", "alice", name,
+        [repositories.RefUpdate(name = "refs/tags/seed", expected = zero, target = blob_id)])
+
+func change(name: str, expected: const u8[], target: const u8[]) -> repositories.RefUpdate:
+    return repositories.RefUpdate(name = name, expected = expected, target = target)
+
+func expect(database: db.Database*, repo: str, name: str, expected: const u8[]) -> !:
+    let value = try repositories.get_ref(database, "alice", "alice", repo, name)
+    defer value.release()
+    let bytes = value.value().bytes()
+    assert(bytes.length == 20)
+    for i in 0..<(usize)20: assert(bytes[i] == expected[i])
+
+func absent(database: db.Database*, repo: str, name: str) -> !:
+    let value = repositories.get_ref(database, "alice", "alice", repo, name) catch failure:
+        assert(failure.code == prism.missing)
+        return
+    value.release()
+    assert(false)
+
+func rejected(database: db.Database*, updates: const repositories.RefUpdate[], expected: ErrorCode) -> !:
+    repositories.update_refs(database, "alice", "alice", "demo", updates) catch failure:
+        assert(failure.code == expected)
+        return
+    assert(false)
+
+func write(database: db.Database*) -> !:
+    try seed(database, "demo")
+    try repositories.update_refs(database, "alice", "alice", "demo", [change("refs/heads/main", zero, first_id), change("refs/tags/v1", zero, blob_id)])
+    try rejected(database, [change("refs/heads/main", zero, second_id)], prism.conflict)
+    # Validate the entire batch before publishing any updates.
+    try rejected(database, [change("refs/heads/main", first_id, second_id), change("refs/tags/v1", first_id, second_id)], prism.conflict)
+    try expect(database, "demo", "refs/heads/main", first_id)
+    try expect(database, "demo", "refs/tags/v1", blob_id)
+    try repositories.update_refs(database, "alice", "alice", "demo", [change("refs/heads/main", first_id, second_id)])
+    try rejected(database, [change("refs/heads/main", first_id, zero)], prism.conflict)
+    try rejected(database, [change("refs/heads/main/child", zero, first_id)], prism.conflict)
+    try repositories.update_refs(database, "alice", "alice", "demo", [change("refs/heads/main", second_id, zero), change("refs/heads/main/child", zero, first_id)])
+    try absent(database, "demo", "refs/heads/main")
+    try expect(database, "demo", "refs/heads/main/child", first_id)
+    try rejected(database, [change("refs/heads/main", zero, first_id)], prism.conflict)
+    try repositories.update_refs(database, "alice", "alice", "demo", [change("refs/heads/main/child", first_id, zero), change("refs/heads/main", zero, second_id)])
+    for name in ["HEAD", "refs/replace/id", "refs/remotes/main", "refs/heads/../x", "refs/heads/a.lock", "refs/heads/a\0b"]:
+        try rejected(database, [change(name, zero, first_id)], prism.invalid)
+    try rejected(database, [change("refs/heads/blob", zero, blob_id)], prism.invalid)
+    try rejected(database, [change("refs/heads/empty", zero, zero)], prism.invalid)
+    try rejected(database, [change("refs/tags/x", zero, first_id), change("refs/tags/x/y", zero, first_id)], prism.conflict)
+    try rejected(database, [change("refs/tags/x", zero, first_id), change("refs/tags/x", zero, first_id)], prism.invalid)
+    var missing: u8[20]
+    for i in 0..<(usize)20: missing[i] = 0x77
+    try rejected(database, [change("refs/heads/main", second_id, first_id), change("refs/tags/missing", zero, missing)], prism.missing)
+    try expect(database, "demo", "refs/heads/main", second_id)
+    try absent(database, "demo", "refs/tags/missing")
+    var empty: repositories.RefUpdate[]
+    try rejected(database, empty, prism.invalid)
+    var short_id: u8[19]
+    try rejected(database, [change("refs/tags/short", short_id, first_id)], prism.invalid)
+    try rejected(database, [change("refs/tags/short", zero, short_id)], prism.invalid)
+    var large: repositories.RefUpdate[65]
+    for i in 0..<(usize)65: large[i] = change("refs/tags/x", zero, first_id)
+    try rejected(database, large, prism.invalid)
+    var long_name: u8[1025]
+    let prefix = b"refs/tags/"
+    for i in 0..<prefix.length: long_name[i] = prefix[i]
+    for i in prefix.length..<long_name.length: long_name[i] = 'a'
+    try rejected(database, [change((str)long_name, zero, blob_id)], prism.invalid)
+    try repositories.update_refs(database, "alice", "alice", "demo", [change((str)long_name[..<1024], zero, blob_id)])
+    try expect(database, "demo", (str)long_name[..<1024], blob_id)
+    try repositories.update_refs(database, "alice", "alice", "demo", [change((str)long_name[..<1024], blob_id, zero)])
+    var denied = false
+    repositories.update_refs(database, "mallory", "alice", "demo", [change("refs/tags/stolen", zero, blob_id)]) catch failure:
+        assert(failure.code == prism.invalid)
+        denied = true
+    assert(denied)
+    let stolen = repositories.get_ref(database, "mallory", "alice", "demo", "refs/heads/main") catch failure:
+        assert(failure.code == prism.invalid)
+        return
+    stolen.release()
+    assert(false)
+
+func read(database: db.Database*) -> !:
+    try expect(database, "demo", "refs/heads/main", second_id)
+    try expect(database, "demo", "refs/tags/v1", blob_id)
+    try absent(database, "demo", "refs/heads/main/child")
+    try absent(database, "demo", "refs/tags/stolen")
+
+func limits(database: db.Database*) -> !:
+    try seed(database, "demo")
+    # Fill the entire advertised bound, including the preexisting seed tag.
+    var names: u8[64][64]
+    var updates: repositories.RefUpdate[64]
+    var made: usize = 1
+    while made < repositories.max_refs:
+        let remaining = repositories.max_refs - made
+        let count = repositories.max_ref_updates if remaining > repositories.max_ref_updates else remaining
+        for i in 0..<count:
+            let label = try format(names[i], f"refs/tags/t{made + i}")
+            updates[i] = change(label, zero, blob_id)
+        try repositories.update_refs(database, "alice", "alice", "demo", updates[..<count])
+        made += count
+    try expect(database, "demo", "refs/tags/t1023", blob_id)
+    try rejected(database, [change("refs/tags/overflow", zero, blob_id)], prism.invalid)
+    try absent(database, "demo", "refs/tags/overflow")
+    # Net-zero cardinality at the bound is legal, regardless of operation order.
+    try repositories.update_refs(database, "alice", "alice", "demo", [change("refs/tags/replacement", zero, blob_id), change("refs/tags/seed", blob_id, zero)])
+    try expect(database, "demo", "refs/tags/replacement", blob_id)
+    try absent(database, "demo", "refs/tags/seed")
+
+var ready: @u64
+var start: @u64
+var wins: @u64
+var conflicts: @u64
+var unexpected: @u64
+var race_case: usize
+
+func attempt(first: bool) -> !:
+    let database = try db.Database.connect((str)socket_buffer[..<socket_length], "ref-test-token")
+    defer database.release()
+    while start.load(.acquire) == 0: thread.sleep(1)
+    var updates: repositories.RefUpdate[2]
+    var count: usize = 1
+    let repo = "prefix" if race_case == 0 else "batch"
+    if race_case == 0:
+        updates[0] = change("refs/heads/topic" if first else "refs/heads/topic/child", zero, first_id)
+    else:
+        updates[0] = change("refs/heads/shared", zero, first_id if first else second_id)
+        updates[1] = change("refs/heads/left" if first else "refs/heads/right", zero, first_id)
+        count = 2
+    repositories.update_refs(database.value(), "alice", "alice", repo, updates[..<count]) catch failure:
+        if failure.code == prism.conflict: discard(conflicts.add(1, .relaxed))
+        else:
+            print(failure.message)
+            discard(unexpected.add(1, .relaxed))
+        return
+    discard(wins.add(1, .relaxed))
+
+func worker_one(raw: void*?):
+    discard(raw)
+    discard(ready.add(1, .release))
+    attempt(true) catch failure:
+        print(failure.message)
+        discard(unexpected.add(1, .relaxed))
+
+func worker_two(raw: void*?):
+    discard(raw)
+    discard(ready.add(1, .release))
+    attempt(false) catch failure:
+        print(failure.message)
+        discard(unexpected.add(1, .relaxed))
+
+func has_ref(database: db.Database*, repo: str, name: str) -> bool!:
+    let value = repositories.get_ref(database, "alice", "alice", repo, name) catch failure:
+        if failure.code == prism.missing: return false
+        error(failure.code, failure.message)
+    value.release()
+    return true
+
+func race(database: db.Database*) -> !:
+    try seed(database, "prefix")
+    try seed(database, "batch")
+    try database.listen()
+    for round in 0..<(usize)2:
+        race_case = round
+        ready.store(0, .relaxed)
+        start.store(0, .relaxed)
+        wins.store(0, .relaxed)
+        conflicts.store(0, .relaxed)
+        unexpected.store(0, .relaxed)
+        var one = try thread.spawn(worker_one, none, name = "ref-one")
+        var two = try thread.spawn(worker_two, none, name = "ref-two")
+        while ready.load(.acquire) != 2: thread.sleep(1)
+        start.store(1, .release)
+        try one.join()
+        try two.join()
+        assert(wins.load(.acquire) == 1 and conflicts.load(.acquire) == 1 and unexpected.load(.acquire) == 0)
+    assert(try has_ref(database, "prefix", "refs/heads/topic") != try has_ref(database, "prefix", "refs/heads/topic/child"))
+    let left = try has_ref(database, "batch", "refs/heads/left")
+    let right = try has_ref(database, "batch", "refs/heads/right")
+    assert(left != right)
+    try expect(database, "batch", "refs/heads/shared", first_id if left else second_id)
+
+pub func main(arguments: str[]) -> i32!:
+    assert(arguments.length == 3)
+    try identify()
+    let database = try db.Database.open(arguments[1], "ref-test-token")
+    defer database.release()
+    let path = arguments[1]
+    assert(path.length + 5 <= socket_buffer.length)
+    for i in 0..<path.length: socket_buffer[i] = path.bytes[i]
+    for i in 0..<(usize)5: socket_buffer[path.length + i] = b".sock"[i]
+    socket_length = path.length + 5
+    if arguments[2] == "read":
+        try read(database.value())
+    else:
+        let authority = try auth.Authority.attach(try database.value().store())
+        defer authority.release()
+        try authority.value().bootstrap("alice", "disposable-ref-test-password")
+        try repositories.initialize(database.value())
+        if arguments[2] == "race":
+            try race(database.value())
+        elif arguments[2] == "limits":
+            try limits(database.value())
+        elif arguments[2] == "ipc":
+            try database.value().listen()
+            let client = try db.Database.connect((str)socket_buffer[..<socket_length], "ref-test-token")
+            defer client.release()
+            try write(client.value())
+            try read(client.value())
+        else:
+            try write(database.value())
+            try read(database.value())
+    print("PASS repository refs")
+    return 0

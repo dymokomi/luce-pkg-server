@@ -56,6 +56,8 @@ jobs:
           set -o pipefail
           python3 tests/run_repositories.py 2>&1 | tee build/repositories-ci.log
           python3 tests/run_repositories.py --mode sanitize 2>&1 | tee build/repositories-sanitize-ci.log
+          python3 tests/run_repositories.py --fixture refs 2>&1 | tee build/refs-ci.log
+          python3 tests/run_repositories.py --fixture refs --mode sanitize 2>&1 | tee build/refs-sanitize-ci.log
       - name: Repository native heap cleanup
         if: runner.os == 'macOS'
         working-directory: luce-pkg-server
@@ -63,6 +65,7 @@ jobs:
         run: |
           set -o pipefail
           python3 tests/run_repositories.py --mode native0 --heap 2>&1 | tee build/repositories-heap-ci.log
+          python3 tests/run_repositories.py --fixture refs --mode native0 --heap 2>&1 | tee build/refs-heap-ci.log
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -73,3 +76,6 @@ jobs:
             luce-pkg-server/build/repositories-ci.log
             luce-pkg-server/build/repositories-sanitize-ci.log
             luce-pkg-server/build/repositories-heap-ci.log
+            luce-pkg-server/build/refs-ci.log
+            luce-pkg-server/build/refs-sanitize-ci.log
+            luce-pkg-server/build/refs-heap-ci.log

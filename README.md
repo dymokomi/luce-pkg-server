@@ -39,7 +39,7 @@ Callers must reconcile ambiguous outcomes, not assume rollback. Returned Prism
 values are owned and must be released. Only repository creation is exposed over
 HTTP; object reads/writes remain internal APIs.
 This is **not** SHA-1 collision-attack protection, commit/tree semantic validation,
-graph reachability, refs, Git push/pull, publisher authorization or signed releases.
+graph reachability, Git push/pull, publisher authorization or signed releases.
 Malformed semantic contents can be stored and must not be advertised as a valid
 Git history. Storage corruption tests deliberately modify disposable raw DB data.
 
@@ -52,6 +52,36 @@ python3 tests/run_repositories.py --mode sanitize
 These tests cover fresh-process reopen, local/IPC reads and writes, concurrent
 duplicate creation through worker-local clients, ownership rejection, exact 1 MiB
 binary objects, name/path boundaries, idempotence and persisted-content tampering.
+
+Internal `update_refs` performs an atomic compare-and-swap batch of up to 64
+`RefUpdate` records (`name`, 20-byte `expected`, 20-byte `target`). Zero expected
+means creation; zero target means deletion. `get_ref` returns an owned 20-byte
+Prism value or a missing error. Refs are restricted to `refs/heads/` and
+`refs/tags/`, with Git syntax, a 1024-byte name bound, lossless encoded storage keys
+and at most 1024 refs per repository. Branch targets must be stored commit
+envelopes; tag refs may name any stored object kind. This checks envelope identity
+and kind, **not** commit structure, graph completeness, ancestry or force-push
+policy. Symbolic refs/HEAD, reflogs and HTTP ref endpoints are not implemented.
+
+Every expected ID and the final namespace is checked before one transaction is
+committed. Prefix conflicts (`topic` versus `topic/child`) are rejected, including
+concurrent creation. A shared per-repository marker write forces competing batches
+to conflict even when they touch different ref names, because Prism does not track
+read predicates. Ref renames expressed as delete+create are permitted when the
+final namespace is valid. Errors before commit publish no partial batch; errors
+after commit can have ambiguous durability outcomes, as with object writes.
+
+```sh
+python3 tests/run_repositories.py --fixture refs
+python3 tests/run_repositories.py --fixture refs --mode sanitize
+python3 tests/run_repositories.py --fixture refs --mode native0 --heap # macOS
+```
+
+Ref fixtures cover stale IDs, malformed/bounded inputs, owner rejection, absent
+objects and wrong branch target kinds, atomic multi-ref failure and renames,
+prefix/batch worker races, the full 1024-ref bound and restart persistence. Fixture
+commit payloads are deliberately opaque: these are ref-storage tests, not Git
+history acceptance tests.
 
 ## End-to-end goal
 

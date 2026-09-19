@@ -1,9 +1,10 @@
 ## Internal repository storage. Principal MUST come from verified authentication,
-## never from a request field. No HTTP exposure, refs or Git graph validation yet.
+## never from a request field. Object/ref APIs remain internal; no graph validation.
 import db
 import prism
 import interop
 import git
+import strings
 
 pub let max_object_bytes: usize = 1048576
 
@@ -132,12 +133,15 @@ pub func put_object(database: db.Database*, principal: str, owner: str, name: st
 pub func get_object(database: db.Database*, principal: str, owner: str, name: str, id: const u8[]) -> interop.Reference[prism.Value]!:
     var path_buffer: u8[192]
     let path = try repo_path(principal, owner, name, path_buffer)
-    var object_buffer: u8[256]
-    let location = try object_path(path, id, object_buffer)
     let snapshot = try database.snapshot()
     defer snapshot.release()
     try require_owner(snapshot.value(), path, principal)
-    let value = try snapshot.value().get(location, "wire")
+    return try checked_object(snapshot.value(), path, id)
+
+func checked_object(session: prism.Session*, path: str, id: const u8[]) -> interop.Reference[prism.Value]!:
+    var object_buffer: u8[256]
+    let location = try object_path(path, id, object_buffer)
+    let value = try session.get(location, "wire")
     errdefer value.release()
     let wire = value.value().bytes()
     if wire.length > max_object_bytes: error(prism.invalid, "stored Git object exceeds limit")
@@ -146,3 +150,137 @@ pub func get_object(database: db.Database*, principal: str, owner: str, name: st
     discard(try git.hash_object(object.kind, object.payload, digest))
     if not same(digest, id): error(prism.invalid, "stored Git object identity mismatch")
     return value
+
+pub let max_refs: usize = 1024
+pub let max_ref_name: usize = 1024
+pub let max_ref_updates: usize = 64
+
+## Borrowed inputs for one atomic batch. All-zero expected means creation;
+## all-zero target means deletion. Both IDs must be exactly 20 bytes.
+pub struct RefUpdate:
+    pub var name: str
+    pub var expected: const u8[]
+    pub var target: const u8[]
+
+func zero_id(id: const u8[]) -> bool:
+    for byte in id:
+        if byte != 0: return false
+    return true
+
+func valid_ref(name: str) -> bool:
+    return name.length <= max_ref_name and git.valid_ref(name) and (strings.starts_with(name, "refs/heads/") or strings.starts_with(name, "refs/tags/"))
+
+func ref_path(root: str, name: str, buffer: u8[]) -> str!:
+    if not valid_ref(name): error(prism.invalid, "invalid repository ref namespace or name")
+    var encoded: u8[2048]
+    let digits = b"0123456789abcdef"
+    for i in 0..<name.length:
+        encoded[i * 2] = digits[(usize)(name.bytes[i] >> 4)]
+        encoded[i * 2 + 1] = digits[(usize)(name.bytes[i] & 15)]
+    return try join([root, "/", (str)encoded[..<name.length * 2]], buffer)
+
+func prefix_conflict(left: str, right: str) -> bool:
+    if left == right: return true
+    if left.length < right.length:
+        return strings.starts_with(right, left) and right.bytes[left.length] == '/'
+    return strings.starts_with(left, right) and left.bytes[right.length] == '/'
+
+func replaced(name: str, updates: const RefUpdate[]) -> bool:
+    for update in updates:
+        if update.name == name: return true
+    return false
+
+func read_ref(session: prism.Session*, location: str, name: str) -> interop.Reference[prism.Value]!:
+    let stored_name = try session.get(location, "name")
+    defer stored_name.release()
+    if try stored_name.value().text_at() != name: error(prism.invalid, "stored ref name mismatch")
+    let value = try session.get(location, "id")
+    errdefer value.release()
+    if value.value().bytes().length != 20 or zero_id(value.value().bytes()):
+        error(prism.invalid, "invalid stored ref identity")
+    return value
+
+## Returns an owning 20-byte ID, or missing. No symbolic refs/HEAD in this API.
+pub func get_ref(database: db.Database*, principal: str, owner: str, name: str, ref_name: str) -> interop.Reference[prism.Value]!:
+    var path_buffer: u8[192]
+    let path = try repo_path(principal, owner, name, path_buffer)
+    var root_buffer: u8[208]
+    let root = try join([path, "/refs"], root_buffer)
+    var location_buffer: u8[2304]
+    let location = try ref_path(root, ref_name, location_buffer)
+    let snapshot = try database.snapshot()
+    defer snapshot.release()
+    try require_owner(snapshot.value(), path, principal)
+    return try read_ref(snapshot.value(), location, ref_name)
+
+## Atomic CAS of every ref in the batch, including cross-ref prefix checks.
+## Shared guard writes serialize competing batches, since Prism detects write
+## overlaps, not read predicates. No force-push policy or graph closure yet.
+pub func update_refs(database: db.Database*, principal: str, owner: str, name: str, updates: const RefUpdate[]) -> !:
+    var path_buffer: u8[192]
+    let path = try repo_path(principal, owner, name, path_buffer)
+    if updates.length == 0 or updates.length > max_ref_updates: error(prism.invalid, "invalid ref batch size")
+    for i in 0..<updates.length:
+        let update = updates[i]
+        if not valid_ref(update.name) or update.expected.length != 20 or update.target.length != 20:
+            error(prism.invalid, "invalid ref update")
+        if zero_id(update.expected) and zero_id(update.target): error(prism.invalid, "empty ref update")
+        for j in 0..<i:
+            if updates[j].name == update.name: error(prism.invalid, "duplicate ref update")
+            if not zero_id(update.target) and not zero_id(updates[j].target) and prefix_conflict(update.name, updates[j].name):
+                error(prism.conflict, "ref prefix conflict")
+    var root_buffer: u8[208]
+    let root = try join([path, "/refs"], root_buffer)
+    let tx = try database.begin()
+    defer tx.release()
+    try require_owner(tx.value(), path, principal)
+    let children = try tx.value().children(root)
+    defer children.release()
+    if children.value().count() > max_refs: error(prism.invalid, "stored ref count exceeds limit")
+    var retained: usize = 0
+    for i in 0..<children.value().count():
+        let child = try children.value().at(i)
+        let label = try tx.value().get(child, "name")
+        defer label.release()
+        let current = try label.value().text_at()
+        if not valid_ref(current): error(prism.invalid, "invalid stored ref name")
+        if replaced(current, updates): continue
+        retained += 1
+        for update in updates:
+            if not zero_id(update.target) and prefix_conflict(current, update.name): error(prism.conflict, "ref prefix conflict")
+    for update in updates:
+        var location_buffer: u8[2304]
+        let location = try ref_path(root, update.name, location_buffer)
+        if try tx.value().contains(location):
+            let existing = try read_ref(tx.value(), location, update.name)
+            defer existing.release()
+            if not same(existing.value().bytes(), update.expected): error(prism.conflict, "stale ref identity")
+        elif not zero_id(update.expected):
+            error(prism.conflict, "expected ref is missing")
+        if not zero_id(update.target):
+            retained += 1
+            let object = try checked_object(tx.value(), path, update.target)
+            defer object.release()
+            let decoded = try git.decode_object(object.value().bytes())
+            if strings.starts_with(update.name, "refs/heads/") and decoded.kind != "commit":
+                error(prism.invalid, "branch target must be a commit")
+    if retained > max_refs: error(prism.invalid, "repository ref limit exceeded")
+    if not try tx.value().contains(root): try tx.value().add(root, "directory")
+    let guard = try prism.Value.boolean(true)
+    defer guard.release()
+    try tx.value().set(path, "refs_serialization", guard)
+    for update in updates:
+        var location_buffer: u8[2304]
+        let location = try ref_path(root, update.name, location_buffer)
+        if zero_id(update.target):
+            try tx.value().remove(location)
+        else:
+            if not try tx.value().contains(location): try tx.value().add(location, "git-ref")
+            let label = try prism.Value.text(update.name)
+            defer label.release()
+            let id = try prism.Value.array(prism.DType.uint8, [20], update.target)
+            defer id.release()
+            try tx.value().set(location, "name", label)
+            try tx.value().set(location, "id", id)
+    discard(try tx.value().commit(wait_ms = 1000))
+    discard(try database.bake(wait_ms = 1000))
