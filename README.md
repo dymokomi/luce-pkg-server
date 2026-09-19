@@ -8,6 +8,12 @@ sit behind the existing VPS HTTPS proxy.
 A loopback invited-account HTTP API is under integration: `/health`,
 `/v1/identity` (verified bearer identity, never proxy-header identity),
 single-use `/v1/invites/redeem`, `/v1/sessions` and `/v1/sessions/revoke`.
+Authenticated `POST /v1/repositories` accepts exactly `{"name":"package-name"}`
+and creates a private repository owned by the verified session user. It returns
+201 on creation, 409 on duplicate/concurrent conflict, 400 for invalid fields,
+401 for missing/invalid/revoked sessions and 503 for storage failures. It accepts
+no owner override; reverse-proxy identity headers grant no authority. A conflict
+may require reconciliation/retry, not necessarily mean the requested name exists.
 Two application workers use one Prism database owner through local IPC.
 The store token is required in `LUCE_REGISTRY_STORE_TOKEN`; it is not an HTTP
 administrator credential. There is no public bootstrap or invite-creation route.
@@ -30,7 +36,8 @@ duplicates are idempotent, differing bytes at the same ID conflict, and reads
 recheck framing and Git identity. Successful writes include the database bake
 barrier; an error can still mean a commit happened before its barrier failed.
 Callers must reconcile ambiguous outcomes, not assume rollback. Returned Prism
-values are owned and must be released. These APIs are not exposed over HTTP yet.
+values are owned and must be released. Only repository creation is exposed over
+HTTP; object reads/writes remain internal APIs.
 This is **not** SHA-1 collision-attack protection, commit/tree semantic validation,
 graph reachability, refs, Git push/pull, publisher authorization or signed releases.
 Malformed semantic contents can be stored and must not be advertised as a valid

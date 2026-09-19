@@ -65,12 +65,32 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             status, token = request(port, 'POST', '/v1/sessions', {'name': 'testuser', 'password': 'fixture-pass'})
             assert status == 200 and len(token) == 32, (status, token)
             headers = {'Authorization': 'Bearer ' + token.decode(), 'X-Forwarded-For': '8.8.8.8'}
+            endpoint = '/v1/repositories'
+            assert request(port, 'POST', endpoint, {'name': 'demo'})[0] == 401
+            assert request(port, 'POST', endpoint, {'name': 'demo'},
+                           {'X-Forwarded-User': 'testuser'})[0] == 401
+            for value in ({}, [], {'name': 3}, {'name': '../escape'}, {'name': 'UPPER'},
+                          {'name': 'demo', 'owner': 'testadmin'}, {'name': 'x' * 65}):
+                assert request(port, 'POST', endpoint, value, headers)[0] == 400, value
+            assert request(port, 'POST', endpoint, {'name': 'demo'}, headers) == (201, b'created')
+            assert request(port, 'POST', endpoint, {'name': 'demo'}, headers)[0] == 409
+            def create_repository(_):
+                return request(port, 'POST', endpoint, {'name': 'parallel'}, headers)[0]
+            with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+                creations = list(pool.map(create_repository, range(16)))
+            assert creations.count(201) == 1 and creations.count(409) == 15, creations
+            admin_status, admin_token = request(port, 'POST', '/v1/sessions',
+                                                {'name': 'testadmin', 'password': 'fixture-password'})
+            assert admin_status == 200
+            admin_headers = {'Authorization': 'Bearer ' + admin_token.decode()}
+            assert request(port, 'POST', endpoint, {'name': 'demo'}, admin_headers)[0] == 201
             def identity(_):
                 return request(port, 'GET', '/v1/identity', headers=headers)
             with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
                 assert all(value == (200, b'testuser') for value in pool.map(identity, range(32)))
             assert request(port, 'POST', '/v1/sessions/revoke', headers=headers) == (200, b'revoked')
             assert request(port, 'GET', '/v1/identity', headers=headers)[0] == 401
+            assert request(port, 'POST', endpoint, {'name': 'revoked'}, headers)[0] == 401
             assert request(port, 'POST', '/v1/sessions', {'name': 'testadmin', 'password': 'fixture-password'})[0] == 200
         finally:
             process.terminate()
@@ -100,6 +120,10 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             status, restored = request(port, 'POST', '/v1/sessions', {'name': 'testuser', 'password': 'fixture-pass'})
             assert status == 200 and len(restored) == 32
             assert request(port, 'GET', '/v1/identity', headers={'Authorization': 'Bearer ' + restored.decode()}) == (200, b'testuser')
+            restored_headers = {'Authorization': 'Bearer ' + restored.decode()}
+            assert request(port, 'POST', '/v1/repositories', {'name': 'demo'}, restored_headers)[0] == 409
+            assert request(port, 'POST', '/v1/repositories', {'name': 'parallel'}, restored_headers)[0] == 409
+            assert request(port, 'POST', '/v1/repositories', {'name': 'after-restart'}, restored_headers)[0] == 201
         finally:
             process.terminate()
             try:
@@ -111,3 +135,4 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
         assert process.returncode == 0, process.returncode
 print('PASS real registry accounts: invited registration, login, parallel identity, revoke, proxy spoof rejection')
 print('PASS restart preserves users, invitation consumption and session revocation')
+print('PASS authenticated repository creation, namespace isolation, races, revocation and restart')

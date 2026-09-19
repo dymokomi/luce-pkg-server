@@ -8,6 +8,7 @@ import json
 import os
 import c
 import strings
+import repositories
 
 func failed(code: ErrorCode, message: str) -> interop.Outcome[interop.Reference[http.Response]]:
     let copied = interop.copy_text(message) catch failure:
@@ -96,6 +97,25 @@ struct App:
         self.authority.value().revoke(token) catch: return reply("unauthorized", 401)
         return reply("revoked")
 
+    func create_repository(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
+        let token = bearer(view.value()) catch: return reply("unauthorized", 401)
+        let who = self.authority.value().verify(token) catch: return reply("unauthorized", 401)
+        defer who.release()
+        let principal = who.value().text_at() catch: return reply("internal error", 500)
+        let body = view.value().body() catch: return reply("invalid body", 400)
+        defer body.release()
+        let payload = body.value().bytes(4096) catch: return reply("invalid body", 400)
+        let document = json.decode((str)payload, 4096) catch: return reply("invalid JSON", 400)
+        defer document.release()
+        let root = document.value().root()
+        if root.kind() != json.Kind.object or root.length() != 1: return reply("invalid fields", 400)
+        let name = field(root, "name") catch: return reply("invalid fields", 400)
+        repositories.create(self.database.value(), principal, name) catch failure:
+            if failure.code == auth.invalid: return reply("invalid repository", 400)
+            if failure.code == auth.conflict: return reply("repository conflict", 409)
+            return reply("repository creation failed", 503)
+        return reply("created", 201)
+
 let app_type = interop.Type[App]("registry", App.close)
 
 func store_token() -> str!:
@@ -131,6 +151,9 @@ func configure(socket: str) -> interop.Outcome[http.Application]:
     let logout = http.Handler.bind(app, App.logout) catch failure: trap(failure.message)
     defer logout.release()
     router.post("/v1/sessions/revoke", logout) catch failure: trap(failure.message)
+    let create_repository = http.Handler.bind(app, App.create_repository) catch failure: trap(failure.message)
+    defer create_repository.release()
+    router.post("/v1/repositories", create_repository) catch failure: trap(failure.message)
     let result = router.application() catch failure: trap(failure.message)
     return interop.Outcome[http.Application].success(interop.Owned[http.Application](result, result.owner))
 
@@ -146,6 +169,7 @@ func run(arguments: str[]) -> i32!:
     defer owner.release()
     let authority = try auth.Authority.attach(try owner.value().store())
     defer authority.release()
+    try repositories.initialize(owner.value())
     try owner.value().listen()
     var socket_buffer: u8[4096]
     let socket = try format(socket_buffer, f"{arguments[1]}.sock")
