@@ -286,8 +286,27 @@ func push_capabilities(capabilities: str) -> !:
             error(prism.invalid, "unsupported push capability")
         start = i + 1
 
+struct PackBases:
+    var session: prism.Session*
+    var path: str
+    var value: interop.Reference[prism.Value]?
+
+    mutating func close():
+        if let value = self.value: value.release()
+        self.value = none
+
+func pack_base(id: const u8[], context: void*?) -> git.Object?!:
+    let bases = (PackBases*)(context else error(prism.invalid, "missing pack lookup context"))
+    bases.close()
+    var buffer: u8[256]
+    let location = try object_path(bases.path, id, buffer)
+    if not try bases.session.contains(location): return none
+    let value = try checked_object(bases.session, bases.path, id)
+    bases.value = value
+    return try git.decode_object(value.value().bytes())
+
 ## Principal must already be authenticated. This is the receive transaction core,
-## not HTTP negotiation or a report-status encoder. Validates a complete non-thin
+## not HTTP negotiation or a report-status encoder. Validates a complete or thin
 ## pack before staging objects, then atomically CAS-publishes graph-checked refs.
 ## Failed staging/ref publication may leave unreferenced immutable objects; retry
 ## and quota/GC policy belong to the caller. No fast-forward/signature policy yet.
@@ -297,7 +316,6 @@ pub func receive_pack(database: db.Database*, principal: str, owner: str, name: 
     let snapshot = try database.snapshot()
     defer snapshot.release()
     try require_owner(snapshot.value(), path, principal)
-    snapshot.value().close()
     let request = try git.decode_push(input)
     try push_capabilities(request.capabilities)
     var previous: u8[1280]
@@ -310,8 +328,12 @@ pub func receive_pack(database: db.Database*, principal: str, owner: str, name: 
         try git.decode_id(command.new_id, targets[i * 20..<i * 20 + 20])
         updates[i] = RefUpdate(name = command.name, expected = previous[i * 20..<i * 20 + 20], target = targets[i * 20..<i * 20 + 20])
     if request.pack.length > 0:
-        var pack = try git.decode_pack(request.pack)
+        var bases = PackBases(session = snapshot.value(), path = path)
+        defer bases.close()
+        var pack = try git.decode_pack_with(request.pack, pack_base, (void*)&bases)
         defer pack.close()
+        bases.close()
+        snapshot.value().close()
         # Validate every packed object's structure, even if no requested ref uses it.
         for item in pack.items:
             if item.kind == "tree": discard(try git.validate_tree(item.payload))
@@ -324,6 +346,8 @@ pub func receive_pack(database: db.Database*, principal: str, owner: str, name: 
             var actual: u8[20]
             try put_object(database, principal, owner, name, wire[..<count], actual)
             if not same(actual, item.id): error(prism.invalid, "stored push object identity mismatch")
+    else:
+        snapshot.value().close()
     try update_refs(database, principal, owner, name, updates[..<request.count])
     return request.count
 
