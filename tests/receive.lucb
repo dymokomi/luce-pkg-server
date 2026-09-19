@@ -63,8 +63,21 @@ func fetch_cases(database: db.Database*, target: const u8[], parent: const u8[])
     var wire: u8[512]
     var output: u8[16384]
     var empty: const u8[]
+    var encoded: u8[40]
+    discard(try git.hex_id(target, encoded))
+    var tag_buffer: u8[256]
+    let tag = try format(tag_buffer, f"object {(str)encoded}\ntype commit\ntag annotated\n\nfetch tag\n")
+    let tag_size = try git.encode_object("tag", tag.bytes, output)
+    var tag_id: u8[20]
+    try repositories.put_object(database, "alice", "alice", "push", output[..<tag_size], tag_id)
+    var updates: repositories.RefUpdate[1]
+    updates[0] = repositories.RefUpdate(name = "refs/tags/annotated", expected = zero, target = tag_id)
+    try repositories.update_refs(database, "alice", "alice", "push", updates)
     let before = try database.snapshot()
     defer before.release()
+    let discovery = try repositories.advertise_upload(database, "alice", "alice", "push", output)
+    assert(strings.contains((str)output[..<discovery], "symref=HEAD:refs/heads/main"))
+    assert(strings.contains((str)output[..<discovery], "refs/tags/annotated^{}"))
     var n = try fetch_wire(target, empty, true, wire)
     var used = try repositories.upload_pack(database, "alice", "alice", "push", wire[..<n], output)
     var response = try git.decode_packet(output[..<used])

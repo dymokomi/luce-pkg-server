@@ -417,6 +417,29 @@ struct GraphNode:
     var kind: u8
 
 pub let receive_capabilities = "report-status delete-refs atomic ofs-delta object-format=sha1"
+pub let fetch_capabilities = "ofs-delta no-progress object-format=sha1"
+
+## Follow annotated tags only, with a shared discovery/authorization byte budget.
+func peel(session: prism.Session*, path: str, id: const u8[], output: u8[], budget: usize*) -> bool!:
+    for i in 0..<(usize)20: output[i] = id[i]
+    var expected: u8 = 0
+    var peeled = false
+    for depth in 0..<(usize)65:
+        let value = try checked_object(session, path, output)
+        defer value.release()
+        let wire = value.value().bytes()
+        if wire.length > *budget: error(prism.invalid, "tag peeling byte limit exceeded")
+        *budget -= wire.length
+        let object = try git.decode_object(wire)
+        let actual = try kind_code(object.kind)
+        if expected != 0 and expected != actual: error(prism.invalid, "tag target type mismatch")
+        if object.kind != "tag": return peeled
+        if depth == 64: error(prism.invalid, "tag peeling depth exceeded")
+        let tag = try git.decode_tag(object.payload)
+        expected = try kind_code(tag.kind)
+        try git.decode_id(tag.object, output)
+        peeled = true
+    error(prism.invalid, "invalid tag chain")
 
 struct AdvertisementRef:
     var name: u8[1024]
@@ -429,9 +452,9 @@ func before(left: str, right: str) -> bool:
         if left.bytes[i] != right.bytes[i]: return left.bytes[i] < right.bytes[i]
     return left.length < right.length
 
-## Smart HTTP receive-pack v0 discovery from one authenticated snapshot. Discard
-## output on failure. Sorted refs, no symbolic HEAD or upload-pack advertisement.
-pub func advertise_receive(database: db.Database*, principal: str, owner: str, name: str, output: u8[]) -> usize!:
+## Smart HTTP v0 discovery from one authenticated snapshot. Discard output on
+## failure. Upload discovery includes peeled tags and fixed main-branch HEAD.
+pub func advertise_receive(database: db.Database*, principal: str, owner: str, name: str, output: u8[], upload: bool = false) -> usize!:
     var path_buffer: u8[192]
     let path = try repo_path(principal, owner, name, path_buffer)
     var root_buffer: u8[208]
@@ -466,22 +489,43 @@ pub func advertise_receive(database: db.Database*, principal: str, owner: str, n
             order[at] = previous
             at -= 1
         order[at] = i
-    var used = try git.encode_packet(git.PacketKind.data, b"# service=git-receive-pack\n", output)
+    var used = try git.encode_packet(git.PacketKind.data, b"# service=git-upload-pack\n" if upload else b"# service=git-receive-pack\n", output)
     used += try git.encode_packet(git.PacketKind.flush, b"", output[used..])
     var line: u8[1200]
+    var has_head = false
+    if upload:
+        for i in 0..<count:
+            let entry = &entries[i]
+            if (str)entry.name[..<entry.length] != "refs/heads/main": continue
+            var encoded: u8[40]
+            discard(try git.hex_id(entry.id, encoded))
+            let text = try format(line, f"{(str)encoded} HEAD\0{fetch_capabilities} symref=HEAD:refs/heads/main\n")
+            used += try git.encode_packet(git.PacketKind.data, text.bytes, output[used..])
+            has_head = true
+    let offered = fetch_capabilities if upload else receive_capabilities
     if count == 0:
-        let text = try format(line, f"0000000000000000000000000000000000000000 capabilities^{{}}\0{receive_capabilities}\n")
+        let text = try format(line, f"0000000000000000000000000000000000000000 capabilities^{{}}\0{offered}\n")
         used += try git.encode_packet(git.PacketKind.data, text.bytes, output[used..])
+    var peel_budget: usize = 67108864
     for i in 0..<count:
         let entry = &entries[order[i]]
         var encoded: u8[40]
         discard(try git.hex_id(entry.id, encoded))
-        let separator = "\0" if i == 0 else ""
-        let capabilities = receive_capabilities if i == 0 else ""
+        let separator = "\0" if i == 0 and not has_head else ""
+        let capabilities = offered if i == 0 and not has_head else ""
         let text = try format(line, f"{(str)encoded} {(str)entry.name[..<entry.length]}{separator}{capabilities}\n")
         used += try git.encode_packet(git.PacketKind.data, text.bytes, output[used..])
+        if upload and strings.starts_with((str)entry.name[..<entry.length], "refs/tags/"):
+            var target: u8[20]
+            if try peel(snapshot.value(), path, entry.id, target, &peel_budget):
+                discard(try git.hex_id(target, encoded))
+                let peeled = try format(line, f"{(str)encoded} {(str)entry.name[..<entry.length]}^{{}}\n")
+                used += try git.encode_packet(git.PacketKind.data, peeled.bytes, output[used..])
     used += try git.encode_packet(git.PacketKind.flush, b"", output[used..])
     return used
+
+pub func advertise_upload(database: db.Database*, principal: str, owner: str, name: str, output: u8[]) -> usize!:
+    return try advertise_receive(database, principal, owner, name, output, true)
 
 func kind_code(kind: str) -> u8!:
     if kind == "blob": return 1
@@ -575,7 +619,7 @@ func release_fetch_leases(leases: FetchLease[], count: usize*):
         if let lease = leases[i].value: lease.release()
 
 ## Native upload-pack core. Discard output on error. Principal is verified by
-## transport. Only advertised ref tips may be requested; no arbitrary-ID reads.
+## transport. Only advertised ref tips/peeled targets; no arbitrary-ID reads.
 ## No shallow/filter/side-band/multi-ACK negotiation is advertised by this core.
 pub func upload_pack(database: db.Database*, principal: str, owner: str, name: str, input: const u8[], output: u8[]) -> usize!:
     var path_buffer: u8[192]
@@ -615,6 +659,7 @@ pub func upload_pack(database: db.Database*, principal: str, owner: str, name: s
     let children = try session.children(root)
     defer children.release()
     if children.value().count() > max_refs: error(prism.invalid, "stored ref count exceeds limit")
+    var peel_budget: usize = 67108864
     for i in 0..<children.value().count():
         let child = try children.value().at(i)
         let label = try session.get(child, "name")
@@ -626,6 +671,11 @@ pub func upload_pack(database: db.Database*, principal: str, owner: str, name: s
         defer ref.release()
         for j in 0..<request.wants:
             if same(ref.value().bytes(), ids[j * 20..<j * 20 + 20]): authorized[j] = true
+        if strings.starts_with(ref_name, "refs/tags/"):
+            var target: u8[20]
+            if try peel(session, path, ref.value().bytes(), target, &peel_budget):
+                for j in 0..<request.wants:
+                    if same(target, ids[j * 20..<j * 20 + 20]): authorized[j] = true
     for i in 0..<request.wants:
         if not authorized[i]: error(prism.invalid, "fetch want was not advertised")
         try wanted.add(ids[i * 20..<i * 20 + 20], 0)

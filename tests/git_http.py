@@ -32,6 +32,7 @@ def check(port, headers, root, request):
 
     repo.mkdir()
     git('init', '--object-format=sha1', '-b', 'main', '-q')
+    git('clone', endpoint, str(root / 'git-empty-clone'))
     (repo / 'main.lucb').write_text('pub func main() -> i32:\n    return 0\n')
     # Large near-identical revisions force stock Git to use a remote delta base.
     source = b''.join(hashlib.sha256(str(i).encode()).hexdigest().encode() + b'\n' for i in range(4096))
@@ -40,6 +41,10 @@ def check(port, headers, root, request):
     git('commit', '-qm', 'initial native registry fixture')
     git('remote', 'add', 'origin', endpoint)
     git('push', '--porcelain', 'origin', 'main')
+    clone = root / 'git-clone'
+    git('clone', endpoint, str(clone))
+    assert (clone / 'large.txt').read_bytes() == source
+    assert git('-C', str(clone), 'symbolic-ref', 'HEAD').strip() == b'refs/heads/main'
     first = git('rev-parse', 'HEAD').strip()
     status, advertisement = request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack', headers=headers)
     assert status == 200 and first + b' refs/heads/main\0' in advertisement, advertisement
@@ -78,6 +83,33 @@ def check(port, headers, root, request):
                               {**headers, 'Content-Type': 'application/x-git-receive-pack-request'})
     assert status == 200 and b'ok refs/heads/thin\n' in report, report
     git('push', 'origin', 'main')
+    git('-C', str(clone), 'fetch', 'origin')
+    git('-C', str(clone), 'merge', '--ff-only', 'origin/main')
+    assert git('-C', str(clone), 'rev-parse', 'HEAD').strip() == latest
+    assert (clone / 'large.txt').read_bytes() == (repo / 'large.txt').read_bytes()
+    git('tag', '-a', 'annotated', '-m', 'native annotated fixture')
+    git('push', 'origin', 'refs/tags/annotated')
+    remote = git('ls-remote', 'origin')
+    assert latest + b'\trefs/tags/annotated^{}' in remote
+    git('-C', str(clone), 'fetch', '--tags', 'origin')
+    assert git('-C', str(clone), 'rev-parse', 'annotated^{}').strip() == latest
+    # Annotated tag of a blob: its peeled target is not an advertised ref tip.
+    blob = git('hash-object', '-w', '--stdin', input=b'tag-only blob\n').strip()
+    git('tag', '-a', 'blob-tag', blob.decode(), '-m', 'blob tag fixture')
+    git('tag', '-a', 'nested-tag', 'blob-tag', '-m', 'nested tag fixture')
+    git('push', 'origin', 'refs/tags/blob-tag', 'refs/tags/nested-tag')
+    remote = git('ls-remote', 'origin')
+    assert blob + b'\trefs/tags/blob-tag^{}' in remote
+    assert blob + b'\trefs/tags/nested-tag^{}' in remote
+    want_blob = b'want ' + blob + b'\n'
+    request_blob = f'{len(want_blob) + 4:04x}'.encode() + want_blob + b'00000009done\n'
+    status, packed_blob = transfer(port, 'POST', '/git/testuser/git-wire/git-upload-pack', request_blob,
+                                  {**headers, 'Content-Type': 'application/x-git-upload-pack-request'})
+    assert status == 200 and packed_blob.startswith(b'0008NAK\nPACK'), packed_blob[:80]
+    git('-C', str(clone), 'index-pack', '--stdin', '--strict', input=packed_blob[8:])
+    assert git('-C', str(clone), 'cat-file', 'blob', blob.decode()) == b'tag-only blob\n'
+    git('-C', str(clone), 'fetch', '--tags', 'origin')
+    git('-C', str(clone), 'fsck', '--strict')
     git('push', '--atomic', 'origin', 'HEAD:refs/heads/z', 'HEAD:refs/heads/a')
     status, advertisement = request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack', headers=headers)
     assert status == 200
@@ -96,5 +128,15 @@ def check(port, headers, root, request):
     assert request(port, 'POST', '/git/testuser/git-wire/git-receive-pack',
                    headers={**headers, 'Content-Type': 'application/x-git-receive-pack-request'})[0] == 400
     git('push', '--porcelain', 'origin', 'main')  # Up-to-date discovery succeeds.
+    fetch_path = '/git/testuser/git-wire/git-upload-pack'
+    want = b'want ' + b'f' * 40 + b'\n'
+    wire = f'{len(want) + 4:04x}'.encode() + want + b'00000009done\n'
+    status, _ = transfer(port, 'POST', fetch_path, wire,
+                         {**headers, 'Content-Type': 'application/x-git-upload-pack-request'})
+    assert status == 403
+    assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-upload-pack')[0] == 401
+    assert request(port, 'POST', fetch_path, headers=headers)[0] == 415
+    assert request(port, 'POST', fetch_path, headers={**headers, 'Content-Type': 'application/x-git-upload-pack-request'})[0] == 400
+    print('PASS stock Git clone, default main HEAD, incremental fetch, annotated tags and strict fsck', flush=True)
     print('PASS stock Git HTTP initial/incremental push, sorted discovery, atomic refs, deletion and failure report', flush=True)
     return latest

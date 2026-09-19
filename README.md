@@ -135,12 +135,20 @@ process environment rather than command-line arguments. Real stock Git tests
 cover initial/incremental push with large similar blobs, atomic multi-ref/tag creation, deletion,
 up-to-date discovery, sorted refs, rejection reports and restart persistence.
 This follows [Git's HTTP protocol](https://git-scm.com/docs/gitprotocol-http).
-HTTP fetch/clone and symbolic HEAD remain unsupported. Pack count, byte,
-lookup and delta-depth limits still bound accepted pushes. No live deployment or
-real credentials are involved.
+Smart HTTP upload-pack v0 is also exposed through `GET/HEAD info/refs?service=git-upload-pack`
+and `POST git-upload-pack`, with the same bearer ownership checks and no-store
+responses. Discovery peels annotated tags, including nested tags, and emits HEAD
+plus `symref=HEAD:refs/heads/main` when `main` exists. The current default-branch
+policy is fixed to `main`, not a configurable persisted symbolic-ref API; missing
+`main` means no advertised HEAD. Git protocol v2 is not negotiated. Clone/fetch
+tests use stock Git, compare file contents, and run strict fsck; no runtime Git
+subprocess is used. Pack count, byte, lookup and depth limits still apply. HTTP
+fetch requests are capped at 1 MiB and responses at 64 MiB; response assembly is
+buffered, not streaming. No live deployment or real credentials are involved.
 
 Internal `upload_pack` now implements bounded stateless fetch selection from one
-authenticated snapshot. Wants must equal current ref tips; unadvertised object IDs
+authenticated snapshot. Wants must equal current ref tips or advertised peeled tag
+targets; unadvertised object IDs
 are rejected. It validates the wanted closure, acknowledges only commits in that
 closure, and subtracts the validated common-history closure before generating a
 full-object pack. A negotiation round returns ACK/NAK without a pack until `done`.
@@ -149,8 +157,8 @@ read-only, retains object leases only through pack encoding, and inherits graph
 and pack resource limits. Discard output on any failure. Supported capability
 tokens are `ofs-delta`, `no-progress`, `object-format=sha1`, and informational
 `agent=`; multi-ACK, side-band, shallow and filter extensions are not implemented.
-Fetch advertisement (including peeled tags), HTTP dispatch and stock clone remain
-the next integration step; this internal API does not by itself expose download.
+Tag peeling validates object IDs and target kinds, is limited to 64 tag levels,
+and shares a 64 MiB object-byte budget per discovery/authorization operation.
 
 Every expected ID and the final namespace is checked before one transaction is
 committed. Prefix conflicts (`topic` versus `topic/child`) are rejected, including

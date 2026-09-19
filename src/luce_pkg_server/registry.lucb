@@ -167,14 +167,26 @@ struct App:
         if not repositories.valid_name(name): return reply("invalid repository", 400)
         if request.method() == "GET" or request.method() == "HEAD":
             let service = (request.query("service") catch: return reply("invalid service", 400)) else return reply("service required", 400)
-            if service != "git-receive-pack": return reply("unsupported Git service", 403)
-            let output = alloc u8[2097152] in memory.heap catch: return reply("internal error", 500)
+            if service != "git-receive-pack" and service != "git-upload-pack": return reply("unsupported Git service", 403)
+            let upload = service == "git-upload-pack"
+            let output = alloc u8[4194304] in memory.heap catch: return reply("internal error", 500)
             defer free(output) in memory.heap
-            let n = repositories.advertise_receive(self.database.value(), principal, owner, name, output) catch failure:
+            let n = repositories.advertise_receive(self.database.value(), principal, owner, name, output, upload) catch failure:
                 if failure.code == auth.missing: return reply("repository not found", 404)
                 return reply("discovery failed", 503)
-            return binary_reply(output[..<n], "application/x-git-receive-pack-advertisement")
+            return binary_reply(output[..<n], "application/x-git-upload-pack-advertisement" if upload else "application/x-git-receive-pack-advertisement")
         let content_type = (request.header("Content-Type") catch: return reply("invalid content type", 415)) else return reply("content type required", 415)
+        if strings.ends_with(request.path(), "/git-upload-pack"):
+            if content_type != "application/x-git-upload-pack-request": return reply("unsupported content type", 415)
+            let body = request.body() catch: return reply("invalid body", 400)
+            defer body.release()
+            let wire = body.value().bytes(1048576) catch: return reply("invalid fetch body", 400)
+            discard(git.decode_fetch(wire) catch: return reply("invalid fetch request", 400))
+            let output = alloc u8[67108864] in memory.heap catch: return reply("internal error", 500)
+            defer free(output) in memory.heap
+            let n = repositories.upload_pack(self.database.value(), principal, owner, name, wire, output) catch:
+                return reply("fetch rejected", 403)
+            return binary_reply(output[..<n], "application/x-git-upload-pack-result")
         if content_type != "application/x-git-receive-pack-request": return reply("unsupported content type", 415)
         let body = request.body() catch: return reply("invalid body", 400)
         defer body.release()
@@ -252,6 +264,7 @@ func configure(socket: str) -> interop.Outcome[http.Application]:
     defer git_http.release()
     router.get("/git/{owner}/{name}/info/refs", git_http) catch failure: trap(failure.message)
     router.post("/git/{owner}/{name}/git-receive-pack", git_http) catch failure: trap(failure.message)
+    router.post("/git/{owner}/{name}/git-upload-pack", git_http) catch failure: trap(failure.message)
     let result = router.application() catch failure: trap(failure.message)
     return interop.Outcome[http.Application].success(interop.Owned[http.Application](result, result.owner))
 
