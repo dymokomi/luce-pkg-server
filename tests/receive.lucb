@@ -3,6 +3,8 @@ import db
 import auth
 import prism
 import git
+import memory
+import strings
 
 let first = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor A\ncommitter A\n\nfirst\n"
 var zero: u8[20]
@@ -43,6 +45,10 @@ func no_writes(database: db.Database*, wire: const u8[]) -> !:
     assert(try before.value().revision() == try after.value().revision())
 
 func cases(database: db.Database*) -> !:
+    let advertisement = try alloc u8[2097152] in memory.heap
+    defer free(advertisement) in memory.heap
+    let empty_advertisement = try repositories.advertise_receive(database, "alice", "alice", "push", advertisement)
+    assert(strings.contains((str)advertisement[..<empty_advertisement], "capabilities^{}"))
     var id: u8[20]
     discard(try git.hash_object("commit", first, id))
     var objects: git.Object[2]
@@ -64,6 +70,13 @@ func cases(database: db.Database*) -> !:
     assert(try repositories.receive_pack(database, "alice", "alice", "push", wire[..<n]) == 2)
     try expect(database, "refs/heads/main", id)
     try expect(database, "refs/tags/keep", id)
+    let advertised = try repositories.advertise_receive(database, "alice", "alice", "push", advertisement)
+    assert(strings.contains((str)advertisement[..<advertised], "refs/heads/main"))
+    var too_small = false
+    discard(repositories.advertise_receive(database, "alice", "alice", "push", advertisement[..<4]) catch:
+        too_small = true
+        recover 0)
+    assert(too_small)
     # A stale create fails without changing either ref or adding duplicate objects.
     try no_writes(database, wire[..<n])
     n = try append(wire, 0, zero, id, "refs/tags/unsupported", "side-band-64k", true)

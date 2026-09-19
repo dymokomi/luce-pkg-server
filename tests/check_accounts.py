@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import object_http
+import git_http
 
 binary, fixture, client = [Path(arg).resolve() for arg in sys.argv[1:]]
 
@@ -86,6 +87,7 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             admin_headers = {'Authorization': 'Bearer ' + admin_token.decode()}
             assert request(port, 'POST', endpoint, {'name': 'demo'}, admin_headers)[0] == 201
             object_path, object_bytes = object_http.check(port, headers, admin_headers)
+            git_commit = git_http.check(port, headers, root, request)
             subprocess.run([str(client), str(port)], check=True, timeout=120)
             def identity(_):
                 return request(port, 'GET', '/v1/identity', headers=headers)
@@ -93,11 +95,16 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
                 assert all(value == (200, b'testuser') for value in pool.map(identity, range(32)))
             assert request(port, 'POST', '/v1/sessions/revoke', headers=headers) == (200, b'revoked')
             assert request(port, 'GET', '/v1/identity', headers=headers)[0] == 401
+            assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack', headers=headers)[0] == 401
             assert request(port, 'POST', endpoint, {'name': 'revoked'}, headers)[0] == 401
             assert object_http.transfer(port, 'GET', object_path, headers=headers)[0] == 401
             assert object_http.transfer(port, 'PUT', object_path, b'', headers)[0] == 401
             assert request(port, 'POST', '/v1/sessions', {'name': 'testadmin', 'password': 'fixture-password'})[0] == 200
         finally:
+            if sys.exc_info()[0] is not None or process.poll() is not None:
+                log.flush()
+                log.seek(0)
+                print('REGISTRY FAILURE LOG:\n' + log.read(), file=sys.stderr, flush=True)
             process.terminate()
             try:
                 process.wait(timeout=10)
@@ -126,12 +133,18 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             assert status == 200 and len(restored) == 32
             assert request(port, 'GET', '/v1/identity', headers={'Authorization': 'Bearer ' + restored.decode()}) == (200, b'testuser')
             restored_headers = {'Authorization': 'Bearer ' + restored.decode()}
+            status, advertisement = request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack', headers=restored_headers)
+            assert status == 200 and git_commit + b' refs/heads/main' in advertisement
             subprocess.run([str(client), str(port)], check=True, timeout=120)
             assert object_http.transfer(port, 'GET', object_path, headers=restored_headers) == (200, object_bytes)
             assert request(port, 'POST', '/v1/repositories', {'name': 'demo'}, restored_headers)[0] == 409
             assert request(port, 'POST', '/v1/repositories', {'name': 'parallel'}, restored_headers)[0] == 409
             assert request(port, 'POST', '/v1/repositories', {'name': 'after-restart'}, restored_headers)[0] == 201
         finally:
+            if sys.exc_info()[0] is not None or process.poll() is not None:
+                log.flush()
+                log.seek(0)
+                print('REGISTRY RESTART FAILURE LOG:\n' + log.read(), file=sys.stderr, flush=True)
             process.terminate()
             try:
                 process.wait(timeout=10)

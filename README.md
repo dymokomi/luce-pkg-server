@@ -32,7 +32,7 @@ The store token is required in `LUCE_REGISTRY_STORE_TOKEN`; it is not an HTTP
 administrator credential. There is no public bootstrap or invite-creation route.
 The disposable account fixture is for tests only. Password costs remain test-only;
 rate limits, expiry, account signatures and production credential policy are pending.
-It binds `127.0.0.1` only. This is not `pkg.luciaos.com`, Git hosting, signed
+It binds `127.0.0.1` only. This is not `pkg.luciaos.com`, complete Git hosting, signed
 releases or real credentials. A green roadmap check is not an authentication,
 storage, cryptography or deployment gate.
 
@@ -107,7 +107,7 @@ walk deduplicates objects across all batch roots and is bounded to 4096 objects,
 65536 edges, 256 MiB of decoded envelopes and 16777216 hash-table probes. Oversized
 histories are rejected, not partially checked. No commit identity/date fsck,
 signature verification, ancestry/force-push policy or SHA-1 collision protection
-is implied. Symbolic refs/HEAD, reflogs and HTTP ref endpoints remain unimplemented.
+is implied. Symbolic refs/HEAD and reflogs remain unimplemented.
 
 Internal `receive_pack` connects the native push-command parser, non-thin pack
 decoder, immutable object storage and graph-checked ref transaction. Its principal
@@ -120,6 +120,21 @@ encode report-status, expose receive-pack HTTP or implement Git authentication.
 Valid staging followed by a ref conflict or disconnected graph can leave
 unreferenced objects; refs remain atomic, but object storage is not rolled back.
 No hooks, thin-pack external bases, fast-forward policy, GC or quotas are provided.
+
+Smart HTTP receive-pack v0 is exposed at `/git/{owner}/{name}`: authenticated
+`GET info/refs?service=git-receive-pack` returns sorted snapshot refs/capabilities,
+and `POST git-receive-pack` consumes the standard request media type and returns
+packet-line report-status when requested. Status capacity is reserved before ref
+mutation; all responses prohibit caching. The transport uses the existing bearer
+session header (stock Git supports `http.extraHeader`); no Basic-password or
+credential-helper integration is claimed. Tests use disposable tokens passed in
+process environment rather than command-line arguments. Real stock Git tests
+cover initial/small incremental push, atomic multi-ref/tag creation, deletion,
+up-to-date discovery, sorted refs, rejection reports and restart persistence.
+This follows [Git's HTTP protocol](https://git-scm.com/docs/gitprotocol-http).
+Fetch/clone/upload-pack, symbolic HEAD, and thin packs referencing remote bases
+remain unsupported. Do not assume arbitrary incremental pushes work until thin
+pack support is implemented. No live deployment or real credentials are involved.
 
 Every expected ID and the final namespace is checked before one transaction is
 committed. Prefix conflicts (`topic` versus `topic/child`) are rejected, including

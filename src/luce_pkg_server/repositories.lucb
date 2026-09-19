@@ -392,6 +392,73 @@ struct GraphNode:
     var id: u8[20]
     var kind: u8
 
+pub let receive_capabilities = "report-status delete-refs atomic ofs-delta object-format=sha1"
+
+struct AdvertisementRef:
+    var name: u8[1024]
+    var length: usize
+    var id: u8[20]
+
+func before(left: str, right: str) -> bool:
+    let count = left.length if left.length < right.length else right.length
+    for i in 0..<count:
+        if left.bytes[i] != right.bytes[i]: return left.bytes[i] < right.bytes[i]
+    return left.length < right.length
+
+## Smart HTTP receive-pack v0 discovery from one authenticated snapshot. Discard
+## output on failure. Sorted refs, no symbolic HEAD or upload-pack advertisement.
+pub func advertise_receive(database: db.Database*, principal: str, owner: str, name: str, output: u8[]) -> usize!:
+    var path_buffer: u8[192]
+    let path = try repo_path(principal, owner, name, path_buffer)
+    var root_buffer: u8[208]
+    let root = try join([path, "/refs"], root_buffer)
+    let snapshot = try database.snapshot()
+    defer snapshot.release()
+    try require_owner(snapshot.value(), path, principal)
+    let children = try snapshot.value().children(root)
+    defer children.release()
+    let count = children.value().count()
+    if count > max_refs: error(prism.invalid, "stored ref count exceeds limit")
+    let entries = try alloc AdvertisementRef[1024] in memory.heap
+    defer free(entries) in memory.heap
+    var order: usize[1024]
+    for i in 0..<count:
+        let child = try children.value().at(i)
+        let label = try snapshot.value().get(child, "name")
+        defer label.release()
+        let ref_name = try label.value().text_at()
+        if not valid_ref(ref_name): error(prism.invalid, "invalid advertised ref")
+        var expected_buffer: u8[2304]
+        if try ref_path(root, ref_name, expected_buffer) != child: error(prism.invalid, "stored ref path mismatch")
+        let value = try read_ref(snapshot.value(), child, ref_name)
+        defer value.release()
+        entries[i] = AdvertisementRef(length = ref_name.length)
+        for j in 0..<ref_name.length: entries[i].name[j] = ref_name.bytes[j]
+        for j in 0..<(usize)20: entries[i].id[j] = value.value().bytes()[j]
+        var at = i
+        while at > 0:
+            let previous = order[at - 1]
+            if not before(ref_name, (str)entries[previous].name[..<entries[previous].length]): break
+            order[at] = previous
+            at -= 1
+        order[at] = i
+    var used = try git.encode_packet(git.PacketKind.data, b"# service=git-receive-pack\n", output)
+    used += try git.encode_packet(git.PacketKind.flush, b"", output[used..])
+    var line: u8[1200]
+    if count == 0:
+        let text = try format(line, f"0000000000000000000000000000000000000000 capabilities^{{}}\0{receive_capabilities}\n")
+        used += try git.encode_packet(git.PacketKind.data, text.bytes, output[used..])
+    for i in 0..<count:
+        let entry = &entries[order[i]]
+        var encoded: u8[40]
+        discard(try git.hex_id(entry.id, encoded))
+        let separator = "\0" if i == 0 else ""
+        let capabilities = receive_capabilities if i == 0 else ""
+        let text = try format(line, f"{(str)encoded} {(str)entry.name[..<entry.length]}{separator}{capabilities}\n")
+        used += try git.encode_packet(git.PacketKind.data, text.bytes, output[used..])
+    used += try git.encode_packet(git.PacketKind.flush, b"", output[used..])
+    return used
+
 func kind_code(kind: str) -> u8!:
     if kind == "blob": return 1
     if kind == "tree": return 2
