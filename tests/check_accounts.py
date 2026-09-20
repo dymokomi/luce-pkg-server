@@ -91,9 +91,13 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
                 statuses = list(pool.map(register, ['racerone', 'racertwo']))
             assert statuses.count(201) == 1 and all(status in (201, 400, 409) for status in statuses), statuses
+            # Exercise the HTTP admission gate with syntactically valid JSON
+            # that authentication rejects before Argon2. Valid nonexistent
+            # accounts intentionally perform password work and can span a full
+            # 60-second window in unoptimized generated-C builds.
             registration_attempts = [
                 request(port, 'POST', '/v1/invites/redeem',
-                        {'code': f'{index + 1000:032x}', 'name': f'unknown{index}', 'password': 'wrong'})
+                        {'code': f'{index + 1000:032x}', 'name': f'Invalid{index}', 'password': 'wrong'})
                 for index in range(32)
             ]
             assert all(status in (400, 429) for status, _ in registration_attempts), registration_attempts
@@ -175,10 +179,11 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             assert object_http.transfer(port, 'GET', object_path, headers=headers)[0] == 401
             assert object_http.transfer(port, 'PUT', object_path, b'', headers)[0] == 401
             assert request(port, 'POST', '/v1/sessions', {'name': 'testadmin', 'password': 'fixture-password'})[0] == 200
-            # Valid-shaped unauthenticated requests consume a process-wide fixed
-            # window before any password KDF. Malformed bodies do not consume it.
+            # Syntactically valid unauthenticated requests consume a process-wide
+            # fixed window before semantic validation or password KDF work.
+            # Malformed bodies do not consume it.
             attempts = [request(port, 'POST', '/v1/sessions',
-                                {'name': f'unknown{index}', 'password': 'wrong'})
+                                {'name': f'Invalid{index}', 'password': 'wrong'})
                         for index in range(32)]
             assert all(status in (401, 429) for status, _ in attempts), attempts
             assert any(value == (429, b'rate limited') for value in attempts), attempts

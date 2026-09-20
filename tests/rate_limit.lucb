@@ -25,6 +25,17 @@ pub func main(arguments: str[]) -> i32!:
     assert(not gate.admit(99))
     assert(gate.admit(160))
 
+    # Exercise the actual module-global gates as used by registry handlers;
+    # local Gate coverage alone cannot detect backend-specific global state.
+    for i in 0..<rate_limit.capacity:
+        discard(i)
+        assert(rate_limit.admit_registration(200))
+        assert(rate_limit.admit_login(200))
+    assert(not rate_limit.admit_registration(200))
+    assert(not rate_limit.admit_login(200))
+    assert(rate_limit.admit_registration(260))
+    assert(rate_limit.admit_login(260))
+
     var shared = Shared()
     var workers: thread.Handle[64]
     for i in 0..<workers.length: workers[i] = try thread.spawn(contender, (void*)&shared)
