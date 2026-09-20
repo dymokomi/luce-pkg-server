@@ -7,6 +7,17 @@ from key_http import ORIGIN
 
 ROOT = '/v1/releases/testuser/git-wire'
 
+def catalog(wire):
+    assert wire[:4] == b'LPV1' and len(wire) >= 6
+    count, at, versions = int.from_bytes(wire[4:6], 'little'), 6, []
+    for _ in range(count):
+        size = wire[at]
+        at += 1
+        versions.append(wire[at:at + size].decode())
+        at += size
+    assert at == len(wire)
+    return versions
+
 
 def check(port, headers, other_headers, root, fixture, commit):
     source = subprocess.check_output(['git', '-C', str(root / 'git-client'), 'pack-objects', '--stdout', '--revs'],
@@ -24,6 +35,9 @@ def check(port, headers, other_headers, root, fixture, commit):
 
     wire, expected = signed()
     binary = dict(headers, **{'Content-Type': 'application/octet-stream'})
+    assert transfer(port, 'GET', ROOT)[0] == 401
+    assert transfer(port, 'GET', ROOT, headers=other_headers)[0] == 403
+    assert catalog(transfer(port, 'GET', ROOT, headers=headers)[1]) == []
     invalid_signature = bytearray(wire)
     invalid_signature[8 + len(expected['metadata'])] ^= 1
     assert transfer(port, 'POST', ROOT, bytes(invalid_signature), binary)[0] == 400
@@ -45,6 +59,7 @@ def check(port, headers, other_headers, root, fixture, commit):
     hostile = dict(binary, Host='attacker.invalid', **{'X-Forwarded-Host': 'attacker.invalid'})
     assert transfer(port, 'POST', ROOT, wire, hostile, chunked=True) == (201, b'published')
     assert transfer(port, 'POST', ROOT, wire, binary) == (200, b'unchanged')
+    assert catalog(transfer(port, 'GET', ROOT, headers=headers)[1]) == ['1.2.3']
     persisted(port, headers, expected)
     assert transfer(port, 'GET', ROOT + '/1.2.3/source')[0] == 401
     assert transfer(port, 'GET', ROOT + '/1.2.3/source', headers=other_headers)[0] == 403
@@ -58,6 +73,7 @@ def check(port, headers, other_headers, root, fixture, commit):
     with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
         statuses = list(pool.map(lambda _: transfer(port, 'POST', ROOT, raced, binary)[0], range(2)))
     assert statuses.count(201) == 1 and all(s in (200, 201, 409) for s in statuses), statuses
+    assert catalog(transfer(port, 'GET', ROOT, headers=headers)[1]) == ['1.2.4', '1.2.3']
     # Force body spooling and chunked source storage with an extra valid Git blob.
     large = os.urandom(1100000)
     blob = subprocess.check_output(['git', '-C', str(root / 'git-client'), 'hash-object', '-w', '--stdin'], input=large, timeout=30).strip()
@@ -70,6 +86,7 @@ def check(port, headers, other_headers, root, fixture, commit):
     persisted(port, headers, expected)
     large_wire, large_expected = signed(version='1.2.5')
     assert transfer(port, 'POST', ROOT, large_wire, binary) == (201, b'published')
+    assert catalog(transfer(port, 'GET', ROOT, headers=headers)[1]) == ['1.2.5', '1.2.4', '1.2.3']
     persisted(port, headers, large_expected, '1.2.5')
     print('PASS signed release HTTP: native proof, framing, ownership, retries, races and spooled/chunked source', flush=True)
     return expected, large_expected

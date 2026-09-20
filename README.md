@@ -143,8 +143,19 @@ successful commit; retain the exact signed upload and reconcile by download.
 configured origin. Parts are `metadata`, `signature`, `publisher_key`, `source`;
 each returns verified binary bytes with Cache-Control:no-store. Invalid paths or
 versions400, missing records404, and stored verification failure503. This is not
-an anonymous package catalog or an independently trusted publisher-key directory.
-Neither endpoint changes the existing Git repository visibility policy.
+an independently trusted publisher-key directory.
+
+`GET /v1/releases/{owner}/{name}` returns the authenticated owner's available
+versions in canonical descending semantic-version order as
+`application/vnd.luce.versions`. The bounded LPV1 body is `LPV1`, a little-endian
+u16 count, then count repetitions of one u8 byte length followed by a canonical
+numeric semantic version. At most1024 versions of at most62 bytes are returned.
+The server validates every storage-path encoding and every stored release identity
+against the configured origin and requested owner/name before emitting the list.
+An empty existing repository returns an empty catalog. The catalog is advisory:
+clients must still download and verify the signed metadata, historical publisher
+key, signature, source digest and Git graph. The endpoint is not anonymous and
+does not change the existing owner-only Git repository visibility policy.
 
 `tests/run_repositories.py --fixture releases` covers six modes, local/IPC/reopen,
 failed-validation no-write, exact retries, immutable version conflicts, duplicate

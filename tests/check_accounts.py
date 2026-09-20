@@ -155,6 +155,7 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             key_http.persisted(port, restored_headers, enrolled_key)
             release_http.persisted(port, restored_headers, release_expected)
             release_http.persisted(port, restored_headers, large_release_expected, '1.2.5')
+            assert release_http.catalog(request(port, 'GET', '/v1/releases/testuser/git-wire', headers=restored_headers)[1]) == ['1.2.5', '1.2.4', '1.2.3']
             status, advertisement = request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack', headers=restored_headers)
             assert status == 200 and git_commit + b' refs/heads/main' in advertisement
             subprocess.run([str(client), str(port)], check=True, timeout=120)

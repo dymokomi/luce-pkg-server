@@ -20,8 +20,8 @@ def main():
     environment = dict(os.environ, LUCE_BASE=str(args.base.resolve()))
     environment.setdefault("LUCE_STD", str(ROOT.parent / "luce-base/src/std"))
     environment.setdefault("LUCE_CACHE", str(ROOT / "build/cache"))
-    def run(command):
-        subprocess.run([str(a) for a in command], cwd=ROOT, env=environment, check=True, timeout=180)
+    def run(command, timeout=180):
+        subprocess.run([str(a) for a in command], cwd=ROOT, env=environment, check=True, timeout=timeout)
     for mode, flags in MODES.items():
         if args.mode not in (mode, "all"): continue
         output = ROOT / "build" / mode
@@ -30,7 +30,11 @@ def main():
         run([args.base.resolve(), "build", ROOT / "src/luce_pkg_server/registry.lucb", *flags, "-o", output / "registry"])
         run([args.base.resolve(), "build", ROOT / "tests/account_fixture.lucb", *flags, "-o", output / "account-fixture"])
         run([args.base.resolve(), "build", ROOT / "tests/client/native_transfer.lucb", *flags, "-o", output / "native-transfer"])
-        run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/check_accounts.py"), output / "registry", output / "account-fixture", output / "native-transfer"])
+        # Unoptimized generated C executes the complete native ML-DSA/Argon2
+        # integration matrix substantially more slowly than the native backend.
+        # Keep the same assertions and only widen the process wall-clock guard.
+        timeout = 420 if mode == "c" else 240
+        run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/check_accounts.py"), output / "registry", output / "account-fixture", output / "native-transfer"], timeout=timeout)
         print(f"PASS {mode}", flush=True)
     print("PASS all selected compiler modes", flush=True)
 

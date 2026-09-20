@@ -280,6 +280,24 @@ struct App:
         defer value.release()
         return binary_reply(value.value().bytes(), "application/octet-stream")
 
+    func release_versions(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
+        let request = view.value()
+        let token = bearer(request) catch: return reply("unauthorized", 401)
+        let who = self.authority.value().verify(token) catch: return reply("unauthorized", 401)
+        defer who.release()
+        let principal = who.value().text_at() catch: return reply("internal error", 500)
+        let owner = request.parameter("owner") else return reply("invalid path", 400)
+        let name = request.parameter("name") else return reply("invalid path", 400)
+        if owner != principal: return reply("forbidden", 403)
+        if not repositories.valid_name(name): return reply("invalid repository", 400)
+        if self.origin_size == 0: return reply("release catalog unavailable", 503)
+        var output: u8[64518]
+        let size = repositories.list_versions(self.database.value(), principal, owner, name,
+            (str)self.origin[..<self.origin_size], output) catch failure:
+            if failure.code == auth.missing: return reply("repository not found", 404)
+            return reply("release catalog unavailable", 503)
+        return binary_reply(output[..<size], "application/vnd.luce.versions")
+
     func git_http(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
         let request = view.value()
         let token = bearer(request) catch: return reply("unauthorized", 401)
@@ -408,6 +426,9 @@ func configure(socket: str) -> interop.Outcome[http.Application]:
     let release_upload = http.Handler.bind(app, App.release_upload) catch failure: trap(failure.message)
     defer release_upload.release()
     router.post("/v1/releases/{owner}/{name}", release_upload) catch failure: trap(failure.message)
+    let release_versions = http.Handler.bind(app, App.release_versions) catch failure: trap(failure.message)
+    defer release_versions.release()
+    router.get("/v1/releases/{owner}/{name}", release_versions) catch failure: trap(failure.message)
     let release_download = http.Handler.bind(app, App.release_download) catch failure: trap(failure.message)
     defer release_download.release()
     router.get("/v1/releases/{owner}/{name}/{version}/{part}", release_download) catch failure: trap(failure.message)

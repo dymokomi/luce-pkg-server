@@ -296,6 +296,73 @@ func release_identity(value: pkg.Release, origin: str, owner: str, name: str, ve
         error(prism.invalid, "release identity mismatch")
     discard(try pkg.parse_version(value.toolchain))
 
+struct VersionEntry:
+    var bytes: u8[62]
+    var length: usize
+    var parsed: pkg.Version
+
+func newer(left: pkg.Version, right: pkg.Version) -> bool:
+    if left.major != right.major: return left.major > right.major
+    if left.minor != right.minor: return left.minor > right.minor
+    return left.patch > right.patch
+
+func nibble(byte: u8) -> u8!:
+    if byte >= '0' and byte <= '9': return byte - '0'
+    if byte >= 'a' and byte <= 'f': return byte - 'a' + 10
+    error(prism.invalid, "invalid encoded release version")
+
+func stored_version(root: str, child: str, output: u8[]) -> str!:
+    if not strings.starts_with(child, root) or child.length <= root.length + 1 or child.bytes[root.length] != '/':
+        error(prism.invalid, "stored release path is outside release root")
+    let suffix = child.bytes[root.length + 1..]
+    if suffix.length == 0 or suffix.length > 124 or suffix.length % 2 != 0:
+        error(prism.invalid, "invalid encoded release version length")
+    let count = suffix.length // 2
+    if output.length < count: error(prism.invalid, "release version output too small")
+    for i in 0..<count: output[i] = (try nibble(suffix[i * 2])) << 4 | try nibble(suffix[i * 2 + 1])
+    let version = (str)output[..<count]
+    discard(try pkg.parse_version(version))
+    return version
+
+## Authenticated owner-only advisory catalog. Each stored metadata identity and
+## canonical path is checked; release download still verifies signature/source.
+pub func list_versions(database: db.Database*, principal: str, owner: str, name: str, origin: str, output: u8[]) -> usize!:
+    var path_buffer: u8[192]
+    let path = try repo_path(principal, owner, name, path_buffer)
+    var root_buffer: u8[208]
+    let root = try join([path, "/releases"], root_buffer)
+    let snapshot = try database.snapshot()
+    defer snapshot.release()
+    try require_owner(snapshot.value(), path, principal)
+    var versions: str[1024]
+    if not try snapshot.value().contains(root): return try pkg.encode_versions(versions, 0, output)
+    let children = try snapshot.value().children(root)
+    defer children.release()
+    let count = children.value().count()
+    if count > versions.length: error(prism.invalid, "stored release count exceeds limit")
+    var entries: VersionEntry[1024]
+    for i in 0..<count:
+        let child = try children.value().at(i)
+        var decoded: u8[62]
+        let version = try stored_version(root, child, decoded)
+        var expected_buffer: u8[352]
+        if try release_path(path, version, expected_buffer) != child: error(prism.invalid, "stored release path is noncanonical")
+        let metadata = try snapshot.value().get(child, "metadata")
+        defer metadata.release()
+        let release = try pkg.decode_release(metadata.value().bytes())
+        try release_identity(release, origin, owner, name, version)
+        entries[i].length = version.length
+        entries[i].parsed = try pkg.parse_version(version)
+        for j in 0..<version.length: entries[i].bytes[j] = version.bytes[j]
+        var at = i
+        while at > 0 and newer(entries[at].parsed, entries[at - 1].parsed):
+            let previous = entries[at - 1]
+            entries[at - 1] = entries[at]
+            entries[at] = previous
+            at -= 1
+    for i in 0..<count: versions[i] = (str)entries[i].bytes[..<entries[i].length]
+    return try pkg.encode_versions(versions, count, output)
+
 func bytes_value(bytes: const u8[]) -> interop.Reference[prism.Value]!:
     return try prism.Value.array(prism.DType.uint8, [(i64)bytes.length], bytes)
 

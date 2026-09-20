@@ -89,6 +89,14 @@ func read(database: db.Database*) -> !:
         let expected = metadata[..<metadata_size] if part == "metadata" else (signature[..<signature.length] if part == "signature" else (public_key[..<public_key.length] if part == "publisher_key" else source[..<source_size]))
         assert(crypto.equal(value.value().bytes(), expected))
 
+func versions(database: db.Database*, expected: const str[]) -> !:
+    let output = try alloc u8[64518] in memory.heap
+    defer free(output) in memory.heap
+    let size = try repositories.list_versions(database, "alice", "alice", "demo", origin, output)
+    var catalog = try pkg.decode_versions(output[..<size])
+    assert(catalog.count == expected.length)
+    for i in 0..<expected.length: assert(try catalog.at(i) == expected[i])
+
 func worker(raw: void*?):
     discard(raw)
     discard(ready.add(1, .release))
@@ -160,6 +168,8 @@ func large(database: db.Database*) -> !:
     discard(try database.bake())
 
 func cases(database: db.Database*, race: bool) -> !:
+    var no_versions: str[1]
+    try versions(database, no_versions[..<0])
     if race:
         var first = try thread.spawn(worker, none)
         var second = thread.spawn(worker, none) catch failure:
@@ -211,6 +221,7 @@ func cases(database: db.Database*, race: bool) -> !:
         assert(try publish(database))
     assert(not try publish(database))
     try read(database)
+    try versions(database, ["1.2.3"])
     var changed = record()
     changed.toolchain = "0.21.0"
     try sign(changed)
@@ -224,7 +235,9 @@ func cases(database: db.Database*, race: bool) -> !:
             recover try prism.Value.text("denied")
         defer denied.release()
         assert(failed)
-    if not race: try large(database)
+    if not race:
+        try large(database)
+        try versions(database, ["1.2.4", "1.2.3"])
 
 pub func main(arguments: str[]) -> i32!:
     assert(arguments.length == 3)
@@ -234,6 +247,7 @@ pub func main(arguments: str[]) -> i32!:
     defer database.release()
     if arguments[2] == "read":
         try read(database.value())
+        try versions(database.value(), ["1.2.4", "1.2.3"])
         let large_source = try repositories.get_release(database.value(), "alice", "alice", "demo", origin, "1.2.4", "source")
         defer large_source.release()
         assert(large_source.value().bytes().length > repositories.chunk_bytes)
