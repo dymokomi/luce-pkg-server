@@ -25,6 +25,7 @@ var ready: @u32
 var start: @u32
 var created: @u32
 var repeated: @u32
+var worker_failures: @u32
 
 func sign(value: pkg.Release) -> !:
     metadata_size = try pkg.encode_release(value, metadata)
@@ -104,8 +105,8 @@ func worker(raw: void*?):
     let database = db.Database.connect(worker_socket, "release-test") catch failure: trap(failure.message)
     defer database.release()
     let result = publish(database.value()) catch failure:
-        assert(failure.code == prism.conflict)
-        discard(repeated.add(1, .relaxed))
+        discard(failure)
+        discard(worker_failures.add(1, .relaxed))
         return
     if result: discard(created.add(1, .relaxed))
     else: discard(repeated.add(1, .relaxed))
@@ -180,7 +181,9 @@ func cases(database: db.Database*, race: bool) -> !:
         start.store(1, .release)
         try first.join()
         try second.join()
-        assert(created.load(.acquire) == 1 and repeated.load(.acquire) == 1)
+        # An exact concurrent retry is reconciled from the freshly committed
+        # immutable record; neither writer reports a spurious storage failure.
+        assert(created.load(.acquire) == 1 and repeated.load(.acquire) == 1 and worker_failures.load(.acquire) == 0)
     else:
         try reject(database, "bob")
         try reject(database, configured_origin = "https://attacker.invalid")

@@ -376,6 +376,29 @@ func bake_committed(database: db.Database*) -> !:
             recover -1
         error(failure.code, failure.message))
 
+## A competing immutable publication can commit while this request is waiting
+## for the single writer. Reconcile only against a complete byte-for-byte record;
+## a different record, missing field or storage error is never treated as success.
+func exact_release(database: db.Database*, principal: str, path: str, location: str,
+                   metadata: const u8[], signature: const u8[], source: const u8[],
+                   key: const u8[]) -> bool!:
+    let snapshot = try database.snapshot()
+    defer snapshot.release()
+    try require_owner(snapshot.value(), path, principal)
+    if not try snapshot.value().contains(location): return false
+    let existing_metadata = try snapshot.value().get(location, "metadata")
+    defer existing_metadata.release()
+    let existing_signature = try snapshot.value().get(location, "signature")
+    defer existing_signature.release()
+    let existing_source = try load_wire(snapshot.value(), path, location)
+    defer existing_source.release()
+    let existing_key = try snapshot.value().get(location, "publisher_key")
+    defer existing_key.release()
+    if not same(existing_metadata.value().bytes(), metadata): return false
+    if not same(existing_signature.value().bytes(), signature): return false
+    if not same(existing_source.value().bytes(), source): return false
+    return same(existing_key.value().bytes(), key)
+
 ## Principal is supplied by authenticated transport, never request metadata.
 ## Exact retries are idempotent; a version can never be replaced. The signed
 ## commit must already exist in this repository and the pack must stand alone.
@@ -454,7 +477,23 @@ pub func publish_release(database: db.Database*, principal: str, owner: str, nam
         try tx.value().set(location, "format", format_value)
         try tx.value().set(location, "size", size)
         try tx.value().set(location, "chunks", chunk_value)
-    discard(try tx.value().commit(wait_ms = 1000))
+    var commit_failed = false
+    var commit_error = prism.invalid
+    discard(tx.value().commit(wait_ms = 1000) catch failure:
+        if failure.code != prism.conflict and failure.code != prism.busy and failure.code != prism.timed_out:
+            error(failure.code, failure.message)
+        commit_failed = true
+        commit_error = failure.code
+        recover -1)
+    if commit_failed:
+        # Release the failed transaction's snapshot before taking a fresh one.
+        # The other request's journal commit is already durable even if its
+        # best-effort checkpoint is still holding writer admission.
+        tx.value().close()
+        if try exact_release(database, principal, path, location, metadata, signature, source, key.value().bytes()):
+            try bake_committed(database)
+            return false
+        error(commit_error, "release publication contention")
     try bake_committed(database)
     return true
 
