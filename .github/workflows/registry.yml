@@ -89,6 +89,8 @@ jobs:
           path: |
             luce-pkg-server/build/accounts-ci.log
             luce-pkg-server/build/sanitize-ci.log
+            luce-pkg-server/build/native3/registry
+            luce-pkg-server/build/native3/admin
             luce-pkg-server/build/repositories-ci.log
             luce-pkg-server/build/repositories-sanitize-ci.log
             luce-pkg-server/build/repositories-heap-ci.log

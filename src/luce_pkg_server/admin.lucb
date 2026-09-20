@@ -1,0 +1,68 @@
+## Local registry operator commands. The store token is accepted only through
+## the process environment; it is never an argument or public HTTP credential.
+import auth
+import c
+import crypto_native as crypto
+import db
+import os
+import luce_pkg_server.repositories as repositories
+
+func store_token() -> str!:
+    let token = os.env((c.str)"LUCE_REGISTRY_STORE_TOKEN") else error(auth.invalid, "LUCE_REGISTRY_STORE_TOKEN is required")
+    if token.length == 0: error(auth.invalid, "empty store token")
+    return token
+
+func generate_token() -> i32!:
+    var secret = try crypto.random_secret(32)
+    defer secret.close()
+    let bytes = try secret.bytes()
+    let digits = b"0123456789abcdef"
+    var output: u8[64]
+    for i in 0..<bytes.length:
+        output[i * 2] = digits[(usize)(bytes[i] >> 4)]
+        output[i * 2 + 1] = digits[(usize)(bytes[i] & 15)]
+    print((str)output)
+    return 0
+
+func initialize(path: str) -> i32!:
+    let database = try db.Database.open(path, try store_token())
+    defer database.release()
+    let authority = try auth.Authority.attach(try database.value().store())
+    defer authority.release()
+    try repositories.initialize(database.value())
+    discard(try database.value().bake(wait_ms = 60000))
+    print("initialized")
+    return 0
+
+## Invitation issuance uses the running owner's Unix socket. This keeps the
+## database lock single-owner and makes the invitation durable before printing.
+func invite(socket: str) -> i32!:
+    let database = try db.Database.connect(socket, try store_token())
+    defer database.release()
+    let authority = try auth.Authority.attach(try database.value().store())
+    defer authority.release()
+    let code = try authority.value().invite()
+    defer code.release()
+    print(try code.value().text_at())
+    return 0
+
+## Offline checkpoint: the registry must be stopped so this process can acquire
+## the exclusive Prism owner lock. Backup tooling calls this before copying data.
+func checkpoint(path: str) -> i32!:
+    let database = try db.Database.open(path, try store_token())
+    defer database.release()
+    let authority = try auth.Authority.attach(try database.value().store())
+    defer authority.release()
+    try repositories.initialize(database.value())
+    let generation = try database.value().bake(wait_ms = 60000)
+    print(f"checkpoint {generation}")
+    return 0
+
+pub func main(arguments: str[]) -> i32!:
+    if arguments.length == 2 and arguments[1] == "token": return try generate_token()
+    if arguments.length != 3:
+        return 2
+    if arguments[1] == "init": return try initialize(arguments[2])
+    if arguments[1] == "invite": return try invite(arguments[2])
+    if arguments[1] == "checkpoint": return try checkpoint(arguments[2])
+    return 2

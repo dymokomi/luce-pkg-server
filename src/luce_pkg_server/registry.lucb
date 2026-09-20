@@ -459,7 +459,10 @@ func run(arguments: str[]) -> i32!:
     let socket = try format(socket_buffer, f"{arguments[1]}.sock")
     var options = http.ServerConfig(address = "127.0.0.1", port = port, network_workers = 2, application_workers = 2,
         body_limit = (i64)max_release_upload, memory_body_limit = 65536,
-        response_limit = (i64)repositories.max_object_bytes)
+        response_limit = (i64)repositories.max_object_bytes,
+        request_timeout_ms = 300000, idle_timeout_ms = 15000,
+        response_timeout_ms = 300000, application_timeout_ms = 300000,
+        shutdown_timeout_ms = 30000)
     var server = try http.Server(options, interop.WorkerEntry[str, unit, unit].native(configure), socket)
     defer server.close()
     try server.shutdown_on_signals()

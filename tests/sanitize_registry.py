@@ -23,6 +23,7 @@ def run(command):
     subprocess.run(list(map(str, command)), cwd=ROOT, env=env, check=True, timeout=600)
 
 for source, name in [('src/luce_pkg_server/registry.lucb', 'registry'),
+                     ('src/luce_pkg_server/admin.lucb', 'admin'),
                      ('tests/account_fixture.lucb', 'account-fixture'),
                      ('tests/client/native_transfer.lucb', 'native-transfer')]:
     generated = output / f'{name}.c'
@@ -31,4 +32,6 @@ for source, name in [('src/luce_pkg_server/registry.lucb', 'registry'),
          '-fno-strict-aliasing', '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
          '-I', runtime, generated, runtime / 'lucb_rt.c', '-pthread', '-lm', '-o', output / name])
 run([sys.executable, ROOT / 'tests/check_accounts.py', output / 'registry', output / 'account-fixture', output / 'native-transfer'])
+run([sys.executable, ROOT / 'tests/admin.py', output / 'admin', output / 'registry'])
+run([sys.executable, ROOT / 'tests/deployment.py', output / 'admin'])
 print('PASS registry ASan/UBSan account and IPC integration')

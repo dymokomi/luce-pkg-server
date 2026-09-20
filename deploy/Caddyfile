@@ -1,0 +1,28 @@
+pkg.luciaos.com {
+	request_body {
+		max_size 65MiB
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "no-referrer"
+		Cache-Control "no-store"
+		-Server
+	}
+	reverse_proxy 127.0.0.1:9420 {
+		header_up Host 127.0.0.1:9420
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 5m
+		}
+	}
+	log {
+		output file /var/log/caddy/luce-pkg-server.log {
+			roll_size 20MiB
+			roll_keep 8
+			roll_keep_for 2160h
+		}
+		format json
+	}
+}

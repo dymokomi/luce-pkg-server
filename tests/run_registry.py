@@ -35,6 +35,7 @@ def main():
         output.mkdir(parents=True, exist_ok=True)
         print(f"MODE {mode}", flush=True)
         run([args.base.resolve(), "build", ROOT / "src/luce_pkg_server/registry.lucb", *flags, "-o", output / "registry"])
+        run([args.base.resolve(), "build", ROOT / "src/luce_pkg_server/admin.lucb", *flags, "-o", output / "admin"])
         run([args.base.resolve(), "build", ROOT / "tests/account_fixture.lucb", *flags, "-o", output / "account-fixture"])
         run([args.base.resolve(), "build", ROOT / "tests/client/native_transfer.lucb", *flags, "-o", output / "native-transfer"])
         # Unoptimized generated C executes the complete native ML-DSA/Argon2
@@ -42,6 +43,8 @@ def main():
         # Keep the same assertions and only widen the process wall-clock guard.
         timeout = 420 if mode == "c" else 240
         run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/check_accounts.py"), output / "registry", output / "account-fixture", output / "native-transfer"], timeout=timeout)
+        run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/admin.py"), output / "admin", output / "registry"], timeout=timeout)
+        run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/deployment.py"), output / "admin"], timeout=timeout)
         print(f"PASS {mode}", flush=True)
     print("PASS all selected compiler modes", flush=True)
 

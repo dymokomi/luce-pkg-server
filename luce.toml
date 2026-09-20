@@ -4,6 +4,7 @@ source = "src"
 
 [exports]
 registry = "luce_pkg_server.registry"
+admin = "luce_pkg_server.admin"
 repositories = "luce_pkg_server.repositories"
 
 [dependencies]

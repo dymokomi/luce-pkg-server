@@ -5,7 +5,7 @@ MIT OR Apache-2.0. Application composition will be Luce; database, authenticatio
 cryptography, Git and package internals will be Luce Base. The HTTP backend will
 sit behind the existing VPS HTTPS proxy.
 
-A loopback invited-account HTTP API is under integration: `/health`,
+A loopback invited-account HTTP API is implemented: `/health`,
 `/v1/identity` (verified bearer identity, never proxy-header identity),
 single-use `/v1/invites/redeem`, `/v1/sessions` and `/v1/sessions/revoke`.
 Authenticated `POST /v1/repositories` accepts exactly `{"name":"package-name"}`
@@ -40,8 +40,8 @@ nonblocking admission gate; login overload returns 503 (registration already map
 service failures to 503). Sessions have a persisted absolute 24-hour lifetime;
 expired sessions and legacy sessions without timestamps are unauthorized. The
 auth library independently validates token syntax before any storage operation.
-Per-account rate limits, session cleanup, release signatures and production
-credential policy are pending.
+Per-account rate limits, session cleanup and production credential policy are
+pending. Native ML-DSA-65 release signatures are implemented below.
 
 Account signing-key enrollment uses native ML-DSA-65. Set `LUCE_REGISTRY_ORIGIN`
 to the exact canonical origin clients sign (for example `https://pkg.luciaos.com`);
@@ -71,9 +71,31 @@ never404. No account parameter or proxy-header override is accepted. Authenticat
 and key lookup share a snapshot in the auth library. Readback remains available
 when new enrollment is disabled by missing origin configuration. This supports
 reconciling uncertain enrollment responses, not public key discovery or rotation.
-It binds `127.0.0.1` only. This is not `pkg.luciaos.com`, complete Git hosting,
-production release hosting or real credentials. A green roadmap check is not an authentication,
-storage, cryptography or deployment gate.
+It binds `127.0.0.1` only. Smart Git HTTP and signed release hosting are
+implemented below, but `pkg.luciaos.com` is not deployed and no real credential
+has been created. A green roadmap check is not an independent authentication,
+storage, cryptography or deployment review.
+
+### Native operator and deployment tools
+
+`src/luce_pkg_server/admin.lucb` builds the local `luce-pkg-admin` binary. Its
+store secret comes only from `LUCE_REGISTRY_STORE_TOKEN` and never from argv.
+`token` generates a native OS-random 256-bit hexadecimal store secret; `init`
+idempotently creates the authority/repository roots in an exclusively opened
+database; `invite` issues and durably publishes one single-use code through the
+running owner's private Unix socket; `checkpoint` opens a stopped registry and
+forces an offline durability checkpoint. There is no public invite-creation or
+bootstrap endpoint.
+
+The checked-in [deployment contract](deploy/README.md) includes a hardened systemd
+unit, a bounded Caddy reverse-proxy block, and no-clobber offline backup/restore
+orchestration. Backups checkpoint the native Prism database and checksum every
+copied state file while excluding the store token. Restore verifies all checksums,
+opens the copied database with the same native operator binary and publishes only
+to a new path. Disposable tests cover wrong-token refusal, one-use invitation
+redemption, repeat initialization/checkpoint, corruption rejection and restored
+database reopen. These assets are preparation, not authorization to change DNS or
+the running VPS.
 
 The internal `repositories` export adds private repository creation and bounded
 Git object persistence over `luce-db`/Prism. Call `initialize` on the database owner
@@ -84,7 +106,9 @@ underscores or hyphens (1–64 bytes, first character alphanumeric); lossless he
 storage keys avoid Prism path restrictions and name aliases.
 
 The internal `publish_release`/`get_release` storage APIs support immutable
-signed releases. HTTP publication/download is available; `luc publish` is not wired yet.
+signed releases. HTTP publication/download and `luc release-sign`,
+`release-upload`, `release-check` and verified download are available; a single
+convenience command named `luc publish` is not required by the wire contract.
 The transport must supply an authenticated principal and configured origin.
 Publication requires exact LRS1 or LRS2 `owner/package` and origin binding,
 numeric toolchain version, the account's enrolled ML-DSA-65 key, a valid
@@ -183,11 +207,13 @@ Reads still assemble the entire object in bounded memory; this is not a streamin
 API. Interrupted/conflicting uploads can leave orphan chunks, and quotas, garbage
 collection and disk-exhaustion policy are not implemented. The content checksum
 is not publisher authentication or comprehensive SHA-1 collision-attack detection.
-Repository creation and owner-only object reads/writes are exposed over HTTP.
-This is **not** SHA-1 collision-attack protection, commit/tree semantic validation,
-graph reachability, Git push/pull, publisher authorization or signed releases.
-Malformed semantic contents can be stored and must not be advertised as a valid
-Git history. Storage corruption tests deliberately modify disposable raw DB data.
+Repository creation and owner-only raw object reads/writes are exposed over HTTP.
+Those raw routes alone are **not** Git publication, but the separate Smart HTTP,
+graph-validation and signed-release routes below compose the complete tested flow.
+Neither route claims general SHA-1 collision-attack protection beyond the explicit
+object checks documented in `luce-git`. Malformed semantic contents can be stored
+but cannot be advertised as valid Git history. Storage corruption tests deliberately
+modify disposable raw DB data.
 
 ```sh
 python3 tools/bootstrap_registry.py
@@ -206,7 +232,8 @@ They also exercise inline/chunk split boundaries, independent-process reopen,
 interrupted staging/restart/resume and corrupted chunks/manifests. HTTP integration
 uploads/downloads real bootstrap source, checks chunked requests, rejection without
 writes, cross-account denial, revocation and restart. Native luc remote integration
-and full Git/release workflows are still required for real package acceptance.
+and full Git/release workflows pass against the disposable registry; production
+HTTPS acceptance remains separate.
 The isolated `tests/client` consumer uses pinned `luce-http-client` and `luce-git`
 to log in, create a repository, PUT/GET the actual compiler source envelope,
 compare every byte and Git ID, revoke its session and verify access denial.
