@@ -42,8 +42,10 @@ def main():
         run([args.base.resolve(), "build", ROOT / "tests/client/native_transfer.lucb", *flags, "-o", output / "native-transfer"])
         # Unoptimized generated C executes the complete native ML-DSA/Argon2
         # integration matrix substantially more slowly than the native backend.
-        # Keep the same assertions and only widen the process wall-clock guard.
-        timeout = 420 if mode == "c" else 240
+        # Hosted x86-64 Linux has exceeded seven minutes after completing Git,
+        # release and both native-client transfers. Keep every assertion and only
+        # widen this per-process wall-clock guard within the 75-minute job bound.
+        timeout = 600 if mode == "c" else 240
         run([output / "http-auth"])
         run([output / "rate-limit"])
         run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/check_accounts.py"), output / "registry", output / "account-fixture", output / "native-transfer"], timeout=timeout)
