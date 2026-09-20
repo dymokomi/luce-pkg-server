@@ -1,6 +1,41 @@
 ## Disposable integration-test credentials only; not an administrative CLI.
 import auth
 import account_identity as keys
+import pkg
+import crypto_native as crypto
+import files
+import paths
+import strings
+import memory
+import c
+
+func write(root: str, name: str, bytes: const u8[]) -> !:
+    let path = try paths.join(root, name)
+    defer strings.release(path)
+    try files.write((c.str)path, bytes)
+
+func release_fixture(arguments: str[]) -> i32!:
+    assert(arguments.length == 8)
+    let source = try files.read_limit((c.str)arguments[6], 67108864)
+    defer free(source) in memory.heap
+    var digest: u8[32]
+    discard(try pkg.source_digest(source, digest))
+    let release = pkg.Release(origin = arguments[2], package = arguments[3], version = arguments[4],
+        commit = arguments[5], source_digest = digest, compiler = "luce-base", toolchain = "0.20.0")
+    var metadata: u8[1600]
+    let size = try pkg.encode_release(release, metadata)
+    var seed: u8[32]
+    var key: u8[1952]
+    var secret: u8[4032]
+    defer crypto.wipe(secret)
+    try crypto.mldsa_keygen(seed, key, secret)
+    var random: u8[32]
+    var signature: u8[3309]
+    try crypto.mldsa_sign(secret, metadata[..<size], random, signature)
+    try write(arguments[7], "release-metadata", metadata[..<size])
+    try write(arguments[7], "release-signature", signature)
+    try write(arguments[7], "release-key", key)
+    return 0
 
 func nibble(byte: u8) -> u8:
     if byte >= '0' and byte <= '9': return byte - '0'
@@ -27,6 +62,7 @@ func proof(arguments: str[]) -> i32!:
 
 pub func main(arguments: str[]) -> i32!:
     if arguments.length > 1 and arguments[1] == "proof": return try proof(arguments)
+    if arguments.length > 1 and arguments[1] == "release": return try release_fixture(arguments)
     assert(arguments.length == 2)
     let authority = try auth.Authority.open(arguments[1], "integration-store-token")
     defer authority.release()

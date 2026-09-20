@@ -12,6 +12,9 @@ import repositories
 import git
 import memory
 import account_identity as keys
+import pkg
+
+let max_release_upload: usize = repositories.max_object_bytes + 1600 + 3309 + 8
 
 func failed(code: ErrorCode, message: str) -> interop.Outcome[interop.Reference[http.Response]]:
     let copied = interop.copy_text(message) catch failure:
@@ -203,6 +206,80 @@ struct App:
         defer value.release()
         return binary_reply(value.value().bytes(), "application/octet-stream")
 
+    func release_upload(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
+        let request = view.value()
+        let token = bearer(request) catch: return reply("unauthorized", 401)
+        let who = self.authority.value().verify(token) catch: return reply("unauthorized", 401)
+        defer who.release()
+        let principal = who.value().text_at() catch: return reply("internal error", 500)
+        let owner = request.parameter("owner") else return reply("invalid path", 400)
+        let name = request.parameter("name") else return reply("invalid path", 400)
+        if owner != principal: return reply("forbidden", 403)
+        if not repositories.valid_name(name): return reply("invalid repository", 400)
+        if self.origin_size == 0: return reply("release publication unavailable", 503)
+        let content_type = (request.header("Content-Type") catch: return reply("invalid headers", 400)) else ""
+        if content_type != "application/octet-stream": return reply("unsupported content type", 415)
+        let bound = self.authority.value().signing_key(token) catch: return reply("publisher key unavailable", 503)
+        let key = bound else return reply("enroll a signing key first", 409)
+        defer key.release()
+        let body = request.body() catch: return reply("invalid body", 400)
+        defer body.release()
+        let size = body.value().size()
+        if size < 8 + 50 + 3309 or size > (i64)max_release_upload: return reply("invalid upload size", 400)
+        # Body.bytes is capped at64MiB; chunk reads preserve the full64MiB pack
+        # allowance plus its bounded signature/metadata envelope without language changes.
+        let wire = alloc u8[(usize)size] in memory.heap catch: return reply("upload memory unavailable", 503)
+        defer free(wire) in memory.heap
+        var used: usize = 0
+        while used < wire.length:
+            let chunk = body.value().read() catch: return reply("invalid upload body", 400)
+            if chunk.length == 0 or chunk.length > wire.length - used: return reply("invalid upload body", 400)
+            for i in 0..<chunk.length: wire[used + i] = chunk[i]
+            used += chunk.length
+        if (str)wire[..<4] != "LRP1" or wire[6] != 0 or wire[7] != 0: return reply("invalid upload schema", 400)
+        let metadata_size = (usize)wire[4] | ((usize)wire[5] << 8)
+        if metadata_size < 50 or metadata_size > 1600 or metadata_size + 8 + 3309 > wire.length:
+            return reply("invalid upload framing", 400)
+        let metadata = wire[8..<8 + metadata_size]
+        let signature = wire[8 + metadata_size..<8 + metadata_size + 3309]
+        let source = wire[8 + metadata_size + 3309..]
+        # Recheck after body acquisition; transport receives/spools before dispatch.
+        let current = self.authority.value().verify(token) catch: return reply("unauthorized", 401)
+        defer current.release()
+        let current_principal = current.value().text_at() catch: return reply("unauthorized", 401)
+        if current_principal != principal: return reply("unauthorized", 401)
+        let created = repositories.publish_release(self.database.value(), principal, owner, name,
+            (str)self.origin[..<self.origin_size], metadata, signature, source) catch failure:
+            if failure.code == auth.conflict: return reply("release conflict", 409)
+            if failure.code == auth.missing: return reply("repository or commit not found", 404)
+            if failure.code == auth.invalid or failure.code == pkg.invalid or failure.code == git.invalid:
+                return reply("invalid signed release", 400)
+            return reply("release storage unavailable", 503)
+        return reply("published" if created else "unchanged", 201 if created else 200)
+
+    func release_download(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
+        let request = view.value()
+        let token = bearer(request) catch: return reply("unauthorized", 401)
+        let who = self.authority.value().verify(token) catch: return reply("unauthorized", 401)
+        defer who.release()
+        let principal = who.value().text_at() catch: return reply("internal error", 500)
+        let owner = request.parameter("owner") else return reply("invalid path", 400)
+        let name = request.parameter("name") else return reply("invalid path", 400)
+        let version = request.parameter("version") else return reply("invalid path", 400)
+        let part = request.parameter("part") else return reply("invalid path", 400)
+        if owner != principal: return reply("forbidden", 403)
+        if not repositories.valid_name(name): return reply("invalid repository", 400)
+        discard(pkg.parse_version(version) catch: return reply("invalid version", 400))
+        if part != "metadata" and part != "signature" and part != "publisher_key" and part != "source":
+            return reply("invalid release component", 400)
+        if self.origin_size == 0: return reply("release download unavailable", 503)
+        let value = repositories.get_release(self.database.value(), principal, owner, name,
+            (str)self.origin[..<self.origin_size], version, part) catch failure:
+            if failure.code == auth.missing: return reply("release not found", 404)
+            return reply("release verification unavailable", 503)
+        defer value.release()
+        return binary_reply(value.value().bytes(), "application/octet-stream")
+
     func git_http(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
         let request = view.value()
         let token = bearer(request) catch: return reply("unauthorized", 401)
@@ -328,6 +405,12 @@ func configure(socket: str) -> interop.Outcome[http.Application]:
     defer object.release()
     router.put("/v1/repositories/{owner}/{name}/objects/{id}", object) catch failure: trap(failure.message)
     router.get("/v1/repositories/{owner}/{name}/objects/{id}", object) catch failure: trap(failure.message)
+    let release_upload = http.Handler.bind(app, App.release_upload) catch failure: trap(failure.message)
+    defer release_upload.release()
+    router.post("/v1/releases/{owner}/{name}", release_upload) catch failure: trap(failure.message)
+    let release_download = http.Handler.bind(app, App.release_download) catch failure: trap(failure.message)
+    defer release_download.release()
+    router.get("/v1/releases/{owner}/{name}/{version}/{part}", release_download) catch failure: trap(failure.message)
     let git_http = http.Handler.bind(app, App.git_http) catch failure: trap(failure.message)
     defer git_http.release()
     router.get("/git/{owner}/{name}/info/refs", git_http) catch failure: trap(failure.message)
@@ -354,7 +437,7 @@ func run(arguments: str[]) -> i32!:
     var socket_buffer: u8[4096]
     let socket = try format(socket_buffer, f"{arguments[1]}.sock")
     var options = http.ServerConfig(address = "127.0.0.1", port = port, network_workers = 2, application_workers = 2,
-        body_limit = (i64)repositories.max_object_bytes, memory_body_limit = 65536,
+        body_limit = (i64)max_release_upload, memory_body_limit = 65536,
         response_limit = (i64)repositories.max_object_bytes)
     var server = try http.Server(options, interop.WorkerEntry[str, unit, unit].native(configure), socket)
     defer server.close()

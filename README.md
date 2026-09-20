@@ -23,7 +23,9 @@ returns 200 with that ID after durable storage (also for exact retries), 400 for
 invalid input, 404 for missing repositories, 409 for conflicts and 503 for storage
 failure. GET returns binary bytes with 200, missing objects with 404, and storage
 or integrity failure with 503. Handler responses use `Cache-Control: no-store`.
-Requests/responses are bounded to 64 MiB; incoming bodies spool above 64 KiB but
+Object/Git requests and responses are bounded to64MiB. The global request ceiling
+is64MiB +4917 bytes to accommodate signed-release envelopes; individual handlers
+retain their own limits. Incoming bodies spool above64KiB but
 handlers still assemble whole objects in memory. The transport receives bodies
 before handler authentication; per-account quotas, early admission/rate limits
 and disk-exhaustion policy remain required before public deployment. Account JSON
@@ -69,8 +71,8 @@ never404. No account parameter or proxy-header override is accepted. Authenticat
 and key lookup share a snapshot in the auth library. Readback remains available
 when new enrollment is disabled by missing origin configuration. This supports
 reconciling uncertain enrollment responses, not public key discovery or rotation.
-It binds `127.0.0.1` only. This is not `pkg.luciaos.com`, complete Git hosting, signed
-releases or real credentials. A green roadmap check is not an authentication,
+It binds `127.0.0.1` only. This is not `pkg.luciaos.com`, complete Git hosting,
+production release hosting or real credentials. A green roadmap check is not an authentication,
 storage, cryptography or deployment gate.
 
 The internal `repositories` export adds private repository creation and bounded
@@ -81,8 +83,8 @@ must already have an account. Package names are lowercase ASCII letters/digits,
 underscores or hyphens (1–64 bytes, first character alphanumeric); lossless hex
 storage keys avoid Prism path restrictions and name aliases.
 
-The internal `publish_release`/`get_release` storage APIs now support immutable
-signed releases; HTTP publication/download and `luc publish` are not wired yet.
+The internal `publish_release`/`get_release` storage APIs support immutable
+signed releases. HTTP publication/download is available; `luc publish` is not wired yet.
 The transport must supply an authenticated principal and configured origin.
 Publication requires exact LRS1 `owner/package` and origin binding, numeric
 toolchain version, the account's enrolled ML-DSA-65 key, a valid signature and
@@ -106,6 +108,43 @@ accepted here. Version deletion/replacement and public-reader authorization are
 not exposed. Reads currently require the repository owner and verify stored
 identity, signature and source digest before returning any component as an owning
 Value. This historical key is not independently trusted publisher-key distribution.
+
+### Signed-release HTTP (owner-authenticated development API)
+
+`POST /v1/releases/{owner}/{name}` requires a live bearer session for that owner,
+an enrolled signing key, configured `LUCE_REGISTRY_ORIGIN`, and Content-Type
+`application/octet-stream`. The upload uses the following LRP1 envelope:
+
+| Offset | Bytes | Content |
+| --- | ---: | --- |
+| 0 | 4 | ASCII `LRP1` |
+| 4 | 2 | Little-endian metadata length M,50..1600 |
+| 6 | 2 | Reserved, both zero |
+| 8 | M | Canonical LRS1 metadata |
+| 8+M | 3309 | ML-DSA-65 signature over metadata |
+| 3317+M | remainder | Standalone source pack, at most64MiB |
+
+The signed metadata selects the version; origin and qualified owner/name must
+match trusted configuration and route identity. Host/forwarded headers never
+override either. The handler reads bounded chunks into a bounded whole-envelope
+buffer, then rechecks the live session/principal before calling the storage core.
+It does not provide early authentication before transport spooling or atomic
+session-revocation ordering throughout publication; ingress rate/quota limits and
+stronger long-operation authorization remain deployment work.
+
+Success is201 `published`, or200 `unchanged` for an exact retry. Invalid
+framing/signature/digest/graph returns400, unauthenticated401, another owner403,
+missing repository/commit404, version conflict or missing signing key409, wrong
+media type415, and operational/unconfigured-origin failure503. Oversized requests
+may be rejected by the transport before handler dispatch. A failure can follow a
+successful commit; retain the exact signed upload and reconcile by download.
+
+`GET /v1/releases/{owner}/{name}/{version}/{part}` uses the same owner session and
+configured origin. Parts are `metadata`, `signature`, `publisher_key`, `source`;
+each returns verified binary bytes with Cache-Control:no-store. Invalid paths or
+versions400, missing records404, and stored verification failure503. This is not
+an anonymous package catalog or an independently trusted publisher-key directory.
+Neither endpoint changes the existing Git repository visibility policy.
 
 `tests/run_repositories.py --fixture releases` covers six modes, local/IPC/reopen,
 failed-validation no-write, exact retries, immutable version conflicts, duplicate
