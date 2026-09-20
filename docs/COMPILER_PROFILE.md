@@ -17,9 +17,10 @@ toolchains also need signed binary/stdlib/target provenance and verification.
 
 ## Authoritative inputs and compiler protocols
 
-The current compilers read `luce.toml`; the separate TOML/YAML and `luc.lock` design
-decision remains open. These fixtures do not rewrite user projects or settle it
-by introducing a second authoritative manifest. Their observed contract follows
+The current compilers read `luce.toml`; `luc` will generate that file privately
+from the authored `package.prisma` and canonical-Prism `luc.lock`. These fixtures
+do not rewrite user projects or introduce a second authoritative manifest. Their
+observed compiler-adapter contract follows
 the pinned Base [package documentation](https://github.com/dymokomi/luce-base/blob/162ff10fce15997abe38337029069971643614b2/docs/PACKAGE-IMPORTS.md).
 
 | Boundary | Required interpretation |

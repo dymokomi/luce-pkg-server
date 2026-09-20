@@ -1,6 +1,6 @@
 # Frozen v1 contracts
 
-Owner decisions and inspections recorded 2026-09-16. These freeze filenames,
+Owner decisions and inspections recorded 2026-09-16 and revised 2026-09-20. These freeze filenames,
 encodings and operational boundaries. They do not complete independent review,
 real-credential custody or `pkg.luciaos.com` deployment.
 
@@ -11,17 +11,26 @@ substitution. These are application-crypto choices, not changes to HTTP/TLS.
 The replacement Prism-backed authority does not by itself implement the complete
 account-key/vault contract below; integration and verification remain required.
 
-## Manifests and locks
+## Package documents, recipes and locks
 
-- Compilers continue to read **`luce.toml`**. YAML is not a v1 target.
-- The lockfile is **`luc.lock`**, TOML, `schema_version = 1`. Compilers do not
-  read it. Only `luc` / `luce-pkg` write and consume it.
-- Owner clarification, September 19, 2026: keep `luce.toml` + `luc.lock`.
-  This supersedes the earlier `luce.lock` filename; no YAML migration.
-- Dual `luce.toml` + `luce.yaml` in one project is an error, not a migration pair.
-- Lock entries bind registry origin, package coordinate, version, canonical
-  source digest (SHA-256), Git object format/commit when sourced from Git,
-  compiler package identity, and toolchain constraints.
+- The authored package definition is **`package.prisma`**, schema
+  `luc.package/1`. It declares identity, requirements, named outcomes, targets,
+  resources, recipes and requested permissions.
+- Optional installation/build logic is high-level Luce in **`install.luc`**,
+  referenced by `package.prisma`; source is not embedded in the Prism document.
+- The generated lockfile remains **`luc.lock`**, but its content is canonical
+  Prism text under `luc.lock/1`. Compilers do not read it. Only `luc` / `luce-pkg`
+  write and consume it.
+- This September 20 decision supersedes the September 19 `luce.toml` plus TOML
+  `luc.lock` target. Existing TOML projects are read-only migration inputs.
+- Current compilers may continue to read `luce.toml`; `luc` generates it privately
+  as an adapter from the resolved Prism graph. It is not a second authored model.
+- Lock entries bind registry origin, package coordinate, version, canonical source
+  digest, Git object format/commit, compiler/toolchain identity, sandbox policy,
+  complete outcome graph and every externally referenced file digest.
+- `install.luc` runs only through `luce run --sandbox ROOT`. It is interpreted,
+  cannot import Luce Base directly or transitively, and returns a bounded Prism
+  plan. `luc` performs staged installation and receipt-based uninstall.
 
 ## Git object format
 
@@ -61,8 +70,10 @@ production-calibrated.
   dependency-aware `LRS2` metadata. LRS2 binds origin, package coordinate,
   version, commit, SHA-256 source digest, compiler/toolchain, compiler package
   identity and the sorted dependency requirements. Publication also verifies
-  those LRS2 identity/dependency fields against the signed commit's root
-  `luce.toml`.
+  those LRS2 identity/dependency fields against the signed commit's root package
+  document. The next release-record revision must bind canonical `package.prisma`,
+  named outcomes, permissions and every referenced file including `install.luc`;
+  LRS2 remains a legacy implemented input during migration.
 - Registry-root signature encoding and freshness/rotation policy remain a
   separate design and review gate.
 - Freshness: root metadata expires; clients reject rollback to older timestamps

@@ -383,6 +383,9 @@ before activation; current VPS testing is isolated and uses disposable test data
 ## Work order
 
 [ROADMAP.md](docs/ROADMAP.md) explains the dependency order and open contracts.
+The revised [package/application plan](docs/PACKAGE_APPLICATION_PLAN.md) gives the
+authoritative implementation order from `package.prisma` and sandboxed
+`install.luc` through staging and activation of `pkg.luciaos.com`.
 [roadmap.json](roadmap.json) records status and evidence. Each library lives in its
 own public repository; commits should contain focused implementation and regression
 tests. Sub-slices may be tested before their parent milestone is complete.
@@ -413,4 +416,5 @@ python3 tests/check_compilers.py
 
 To reuse trusted pinned compiler builds, pass `--base PATH --luce PATH` to the last
 command. Current TOML inputs are compatibility fixtures, not a decision to silently
-migrate project manifests. The manifest/lock and real registry gates remain open.
+migrate project manifests. The `package.prisma`/Prism-lock implementation and real
+registry gates remain open.

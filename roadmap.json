@@ -1,13 +1,17 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "origin": "https://pkg.luciaos.com",
   "owner_handle": "dymokomi",
   "license": "MIT OR Apache-2.0",
   "client": {
-    "repository": "luce-cli",
+    "repository": "luce-luc",
     "executable": "luc",
     "compiler_commands": ["luce", "luce-base"],
-    "language_source_changes_required": false,
+    "language_syntax_changes_required": false,
+    "luce_tooling_changes_required": true,
+    "package_document": "package.prisma",
+    "lock_document": "luc.lock",
+    "sandbox_command": "luce run --sandbox ROOT FILE -- ARGS",
     "decision": "docs/CLI_DECISION.md"
   },
   "milestones": [
@@ -40,15 +44,17 @@
       {"repository":"luce-db", "commit":"664af5f703952fc51f1a23de918025385e2e77c9", "ci":"https://github.com/dymokomi/luce-db/actions/runs/34940960779", "scope":"Journal recovery now syncs the replayed journal and retained parent directory on every open, including complete existing files after unacknowledged writes. Per-store native I/O controls add 200 deterministic write/read/sync/directory/truncate/reopen/concurrent-reader/queued-writer isolation cases. Six local/Linux/macOS modes and ASan/UBSan pass with all prior DB/server suites. Verified 17-member Linux bundle passes the isolated-host suite in 10.465 seconds / 1.642 seconds CPU. Exact stage removed, live applications and reverse proxy unchanged. Checkpoint/backup/migrations remained later work at this checkpoint."},
       {"repository":"luce-db", "commit":"d13a1d1ce1116914e2b63bc9dff99dbde816f345", "ci":"https://github.com/dymokomi/luce-db/actions/runs/34918633116", "scope":"Experimental WAL/AVL, transactions/snapshots, bounded FIFO admission/statistics; Linux/macOS six modes and ASan/UBSan; isolated VPS correctness suite. Checkpoint/migration/restore and deterministic sync faults remain open at this historical checkpoint."}
     ]},
+    {"id":"M1d", "status":"in_progress", "requires":["M0"], "repositories":["luce-prism"], "evidence":[]},
     {"id":"M2a", "status":"in_progress", "requires":["M1a","M1b","M1c"], "repositories":["luce-git"], "evidence":[
       {"repository":"luce-git", "commit":"03fa1526fe05bb292d7665f6cbe0b63c200d4cc3", "ci":"https://github.com/dymokomi/luce-git/actions/runs/35059680663", "scope":"Native Git blob object IDs: SHA-1 of canonical blob {size} NUL payload. hello-newline and empty blob match stock Git hash-object. Six local/Linux/macOS modes and ASan/UBSan. SHA-1 is not used for releases or vaults. Packs, refs, Smart HTTP and collision-prefix rejection remain later slices. Not M2a complete."}
     ]},
     {"id":"M2b", "status":"in_progress", "requires":["M1b","M1c"], "repositories":["luce-auth"], "evidence":[
       {"repository":"luce-auth", "commit":"8160fd33d63faf8bba2431571232e95d4b8de2f0", "ci":"https://github.com/dymokomi/luce-auth/actions/runs/35059686684", "scope":"LID1 invite encode/decode (kind 1 with flags, expiry, code, role, 32-byte nonce) and Argon2id plus XChaCha20-Poly1305 vault wrap/unwrap using luce-crypto exports. Token SHA-256 digests. Test vault costs 8192 KiB/1 pass; production starting point 65536/3 recorded not executed. Six local/Linux/macOS modes and ASan/UBSan. Not persistence, recovery, devices, reviewed custody or M2b complete."}
     ]},
-    {"id":"M2c", "status":"in_progress", "requires":["M0","M1a","M1b"], "repositories":["luce-pkg"], "evidence":[
+    {"id":"M2c", "status":"in_progress", "requires":["M0","M1a","M1b","M1d"], "repositories":["luce-pkg"], "evidence":[
       {"repository":"luce-pkg", "commit":"50b9c773b73047817f064d10e5ae6583bbb35dde", "ci":"https://github.com/dymokomi/luce-pkg/actions/runs/35059676061", "scope":"Numeric SemVer parse, 0.x caret selection, luce.lock schema_version=1 origin encode/parse and SHA-256 source digest via luce-crypto. Six local/Linux/macOS modes and ASan/UBSan. Compilers still do not read the lockfile. Not a resolver, TUF client, archive/cache, installer or M2c complete."}
     ]},
+    {"id":"M2d", "status":"pending", "requires":["M0"], "repositories":["luce"], "evidence":[]},
     {"id":"M3a", "status":"in_progress", "requires":["M0"], "repositories":["luce-server","luce-http-client"], "evidence":[
       {"repository":"luce-http-client", "commit":"db44c778184e9381b861e5bb36aa9f20d3cf4f1b", "ci":"https://github.com/dymokomi/luce-http-client/actions/runs/35110745208", "scope":"Native cleartext HTTP/1.1 GET/POST client to numeric IPv4 peers using Base net codecs. Six local/Linux/macOS modes and ASan/UBSan against an independent Python origin, including Authorization and X-Forwarded-For header round-trips. No DNS, redirects, TLS or production HTTPS. Not M3a complete."},
       {"repository":"luce-pkg-server", "commit":"07a65895a4c916777f86e462360c4df1e7871490", "ci":"https://github.com/dymokomi/luce-pkg-server/actions/runs/35110749000", "scope":"Loopback HTTP registry binds 127.0.0.1 only. Identity is never taken from X-Forwarded-For; Authorization and Git-Protocol are preserved. Six local/Linux/macOS compiler modes. Not public site activation, streaming Git, or M3a complete."}
@@ -56,21 +62,23 @@
     {"id":"M3b", "status":"in_progress", "requires":["M1b"], "repositories":["luce-tls","luce-http-client"], "evidence":[
       {"repository":"luce-tls", "commit":"60f5501781ae67eec95f28528fd0421c1fc04b18", "ci":"https://github.com/dymokomi/luce-tls/actions/runs/35110750742", "scope":"TLS 1.3 HKDF-Expand-Label (SHA-256 via luce-crypto), TLS record-header parse and RFC 6125 exact/leftmost-wildcard DNS-ID matching. Six local/Linux/macOS modes and ASan/UBSan. Not a handshake, X.509 path builder, verified HTTPS or M3b complete."}
     ]},
-    {"id":"M4", "status":"in_progress", "requires":["M2b","M3a"], "repositories":["luce-auth","luce-pkg-server","luce-cli"], "evidence":[
+    {"id":"M4", "status":"in_progress", "requires":["M2b","M3a"], "repositories":["luce-auth","luce-pkg-server","luce-luc"], "evidence":[
       {"repository":"luce-pkg-server", "commit":"07a65895a4c916777f86e462360c4df1e7871490", "ci":"https://github.com/dymokomi/luce-pkg-server/actions/runs/35110749000", "scope":"Loopback invited-account API: GET /health, GET /v1/identity, POST /v1/invites/redeem with single-use LID1 invites on luce-db. Duplicate redeem is 409. Six local/Linux/macOS modes. Not operator luc auth, devices/recovery, public registration or M4 complete."}
     ]},
     {"id":"M5", "status":"pending", "requires":["M2a","M4"], "repositories":["luce-git","luce-pkg-server"], "evidence":[]},
     {"id":"M6", "status":"pending", "requires":["M2c","M5"], "repositories":["luce-pkg","luce-pkg-server"], "evidence":[]},
-    {"id":"M7", "status":"pending", "requires":["M3b","M6"], "repositories":["luce-cli","luce-pkg"], "toolchains":["luce","luce-base"], "evidence":[]},
-    {"id":"M8", "status":"pending", "requires":["M3a","M3b","M4","M5","M6","M7"], "repositories":["luce-pkg-server"], "evidence":[]}
+    {"id":"M7", "status":"pending", "requires":["M2c","M2d"], "repositories":["luce-luc","luce-pkg","luce"], "toolchains":["luce","luce-base"], "evidence":[]},
+    {"id":"M8", "status":"pending", "requires":["M3b","M6","M7"], "repositories":["luce-luc","luce-pkg","luce-pkg-server"], "toolchains":["luce","luce-base"], "evidence":[]},
+    {"id":"M9", "status":"pending", "requires":["M3a","M4","M5","M6","M8"], "repositories":["luce-pkg-server","luce-luc"], "evidence":[]},
+    {"id":"M10", "status":"pending", "requires":["M9"], "repositories":["luce-pkg-server"], "evidence":[]}
   ],
   "final_acceptance": [
-    {"id":"owner_registration", "status":"pending", "requires":["M8"], "evidence":[]},
-    {"id":"git_upload_and_release", "status":"pending", "requires":["M8"], "evidence":[]},
-    {"id":"verified_https_download", "status":"pending", "requires":["M8"], "evidence":[]},
-    {"id":"luce_fresh_project", "status":"pending", "requires":["M8"], "client":"luc", "language":"luce", "evidence":[]},
-    {"id":"luce_base_fresh_project", "status":"pending", "requires":["M8"], "client":"luc", "language":"luce-base", "evidence":[]},
-    {"id":"locked_offline_relocated_build", "status":"pending", "requires":["M8"], "evidence":[]},
-    {"id":"negative_security_and_restore", "status":"pending", "requires":["M8"], "evidence":[]}
+    {"id":"owner_registration", "status":"pending", "requires":["M10"], "evidence":[]},
+    {"id":"git_upload_and_release", "status":"pending", "requires":["M10"], "evidence":[]},
+    {"id":"verified_https_download", "status":"pending", "requires":["M10"], "evidence":[]},
+    {"id":"luce_fresh_project", "status":"pending", "requires":["M10"], "client":"luc", "language":"luce", "evidence":[]},
+    {"id":"luce_base_fresh_project", "status":"pending", "requires":["M10"], "client":"luc", "language":"luce-base", "evidence":[]},
+    {"id":"locked_offline_relocated_build", "status":"pending", "requires":["M10"], "evidence":[]},
+    {"id":"negative_security_and_restore", "status":"pending", "requires":["M10"], "evidence":[]}
   ]
 }

@@ -7,7 +7,8 @@ import re
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-MILESTONES = {"M0", "M1a", "M1b", "M1c", "M2a", "M2b", "M2c", "M3a", "M3b", "M4", "M5", "M6", "M7", "M8"}
+MILESTONES = {"M0", "M1a", "M1b", "M1c", "M1d", "M2a", "M2b", "M2c", "M2d",
+              "M3a", "M3b", "M4", "M5", "M6", "M7", "M8", "M9", "M10"}
 ACCEPTANCE = {"owner_registration", "git_upload_and_release", "verified_https_download",
               "luce_fresh_project", "luce_base_fresh_project", "locked_offline_relocated_build",
               "negative_security_and_restore"}
@@ -19,21 +20,27 @@ def require(condition, message):
 
 
 def validate(data):
-    require(data["schema_version"] == 1, "unknown schema")
+    require(data["schema_version"] == 2, "unknown schema")
     require(data["origin"] == "https://pkg.luciaos.com", "canonical HTTPS origin changed")
     require(data["owner_handle"] == "dymokomi", "owner acceptance target changed")
     require(data["license"] == "MIT OR Apache-2.0", "license changed")
-    require(data["client"] == {"repository": "luce-cli", "executable": "luc",
+    require(data["client"] == {"repository": "luce-luc", "executable": "luc",
                               "compiler_commands": ["luce", "luce-base"],
-                              "language_source_changes_required": False,
+                              "language_syntax_changes_required": False,
+                              "luce_tooling_changes_required": True,
+                              "package_document": "package.prisma",
+                              "lock_document": "luc.lock",
+                              "sandbox_command": "luce run --sandbox ROOT FILE -- ARGS",
                               "decision": "docs/CLI_DECISION.md"}, "standalone client contract changed")
     rows = data["milestones"] + data["final_acceptance"]
     by_id = {row["id"]: row for row in rows}
     require(len(by_id) == len(rows), "duplicate milestone")
     require({row["id"] for row in data["milestones"]} == MILESTONES, "missing/unknown milestone")
     require({row["id"] for row in data["final_acceptance"]} == ACCEPTANCE, "missing acceptance test")
-    require(by_id["M7"]["repositories"] == ["luce-cli", "luce-pkg"] and
+    require(by_id["M7"]["repositories"] == ["luce-luc", "luce-pkg", "luce"] and
             by_id["M7"]["toolchains"] == ["luce", "luce-base"], "client implementation/toolchain boundary changed")
+    require(by_id["M2d"]["repositories"] == ["luce"] and
+            by_id["M2d"]["requires"] == ["M0"], "sandbox boundary changed")
     for identifier, language in [("luce_fresh_project", "luce"), ("luce_base_fresh_project", "luce-base")]:
         require(by_id[identifier].get("client") == "luc" and by_id[identifier].get("language") == language,
                 "standalone client must exercise both languages")
@@ -58,7 +65,7 @@ def validate(data):
         for dependency in row["requires"]:
             require(dependency in MILESTONES, "unknown prerequisite")
         if row["id"] in ACCEPTANCE:
-            require(row["requires"] == ["M8"], "production acceptance requires M8")
+            require(row["requires"] == ["M10"], "production acceptance requires M10")
         if row["status"] == "complete":
             require(bool(row["evidence"]), "completion needs evidence")
             require(all(by_id[item]["status"] == "complete" for item in row["requires"]),
@@ -116,8 +123,8 @@ class TrackerTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "CI link"):
             validate(self.data)
 
-    def test_refuses_embedded_cli_or_language_edit_requirement(self):
-        for field, value in [("executable", "luce"), ("language_source_changes_required", True)]:
+    def test_refuses_embedded_cli_or_language_syntax_change(self):
+        for field, value in [("executable", "luce"), ("language_syntax_changes_required", True)]:
             candidate = copy.deepcopy(self.data)
             candidate["client"][field] = value
             with self.assertRaisesRegex(ValueError, "standalone client"):

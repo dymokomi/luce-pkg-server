@@ -23,10 +23,11 @@ with core ChaCha20/Poly1305 definitions and vectors in
 [RFC 8439](https://www.rfc-editor.org/rfc/rfc8439.html). Do not substitute RFC
 8439's shorter nonce. AES-256-GCM was the declined alternative.
 
-v1 package manifests remain compiler-compatible **`luce.toml`**. `luc` reads and
-writes that format. A YAML migration is not a v1 target. The lockfile
-filename/encoding is still unfrozen and is a later M0 item, not a silent
-companion of this decision.
+The compiler adapter remains compatible with **`luce.toml`**, while the authored
+package document is `package.prisma` and generated lock state is canonical Prism
+in `luc.lock`. `luc` reads the package document and alone writes the lock. A YAML
+migration is not a v1 target. Exact package/lock schemas and canonicalization are
+the M0/M1d implementation gate described in the package/application plan.
 
 Kinogaki's inspected `Key.h`/`Seal.h` use Ed25519 signatures and
 XChaCha20-Poly1305 content encryption through C++. That is

@@ -12,16 +12,20 @@ are not hidden production implementations. External Git and SQLite remain unsele
 | M1a | `luce-compress` | Bounded streaming DEFLATE/zlib; independent fixtures in both directions; incremental/consumed-byte, truncation, bomb, overflow and ownership tests |
 | M1b | `luce-crypto` | Official vectors, independent differential/negative tests, entropy failure and secret ownership; generated-code/constant-time review |
 | M1c | `luce-db` | Atomic races, snapshots, bounded writer lifecycle, deterministic I/O/crash recovery, checkpoint/migration/restore and resource tests |
+| M1d | `luce-prism` package substrate | Canonical package/lock/context/plan/receipt schemas, external-file digests, bounds, hostile paths and semantic hash fixtures |
 | M2a | `luce-git`, offline | Objects/packs/refs, graph and collision validation, ref races and stock-Git interoperability |
 | M2b | `luce-auth`, offline | One-use invitations, keys/devices, local vault, recovery/revocation and no plaintext secrets in storage/history |
-| M2c | `luce-pkg`, offline | Versioned manifests/locks, deterministic resolution, canonical verified archives/cache and hostile-input tests |
+| M2c | `luce-pkg`, offline | `package.prisma`, Prism `luc.lock`, named outcomes, deterministic resolution, canonical verified archives/cache and hostile-input tests |
+| M2d | Luce sandbox | `luce run --sandbox ROOT`: interpreted high-level Luce, rooted imports, Base/native refusal, OS confinement and resource/escape tests |
 | M3a | HTTP/proxy foundation | Early admission, streaming/limits/cancellation, binary traffic, trusted-header rules and non-public backend binding |
 | M3b | `luce-tls` / `luce-http-client` | Native verified HTTPS; certificate/hostname/trust/redirect failures; review before real credentials |
 | M4 | Invited account API / operator CLI | Registration proof + one-use invite, concurrent duplicate/expired/revoked claims, scoped tokens and redacted logs |
 | M5 | Git hosting | Standard HTTPS clone/fetch/push, ACL/ref/object isolation, aborted/concurrent pushes and bounded resource use |
 | M6 | Signed package releases | Authorized release-from-commit, immutable versions, tamper/replay/rollback rejection and DB/object consistency |
-| M7 | Standalone `luc` client and toolchain integration | Project/toolchain management, fresh install/import/link/build with both compiler executables, locked/offline/relocated builds; no language-source changes required |
-| M8 | Operational acceptance | Independent reviews, upgrade/rollback, backup/restore, key custody/rotation, quotas/monitoring, then approved domain activation |
+| M7 | Local `luc` libraries and applications | Compiler adapters, sandboxed `install.luc`, staged installs/receipts, fresh import/link/build and `luced` application acceptance |
+| M8 | Remote `luc` integration | Verified publish/add/lock/sync/install/x against signed releases with both toolchains and offline/relocated replay |
+| M9 | Isolated staging | Disposable invited users, stock Git, package publication/download, application install, restart/upgrade/rollback/restore on the VPS without production activation |
+| M10 | Operational readiness and production | Independent reviews, key custody/rotation, quotas/monitoring, backup/restore, immutable deployment, reviewed proxy activation and rollback |
 
 Follow the prerequisites in `roadmap.json`, not repository creation order. Never
 label a dependent milestone complete with an incomplete prerequisite. Existing DB
@@ -38,22 +42,25 @@ Decided by the owner:
 - Ordinary HTTP backend behind existing HTTPS termination; no custom Git transport
   helper or strict post-quantum transport requirement for this first deployment.
 - Invitation-gated accounts. Final owner handle `dymokomi`; secrets are not public.
-- Standalone `luc` manages toolchains, projects and packages for both languages;
-  planned repository `luce-cli`. This replaces the earlier embedded compiler-CLI
+- Standalone `luc` from `luce-luc` manages toolchains, projects, packages and
+  applications for both languages. This replaces the earlier embedded compiler-CLI
   requirement; see [CLI_DECISION.md](CLI_DECISION.md). Real compile/link acceptance remains.
 - Application signatures are ML-DSA-65; local vaults are Argon2id +
   XChaCha20-Poly1305. See [APPLICATION_CRYPTO_PROPOSAL.md](APPLICATION_CRYPTO_PROPOSAL.md).
-- v1 manifests remain compiler-compatible `luce.toml`. YAML is not a v1 target.
-  The lockfile is `luc.lock` (TOML, schema_version = 1; owner naming clarification
-  September 19, 2026). Compilers do not read it.
-  See [CONTRACTS.md](CONTRACTS.md).
+- The authored package document is `package.prisma`; optional high-level Luce
+  installation logic lives in a referenced `install.luc`. `luc.lock` remains a
+  separate generated file but contains canonical Prism text. Current compilers
+  continue to receive private generated `luce.toml` adapters. See
+  [CONTRACTS.md](CONTRACTS.md) and the authoritative
+  [package/application plan](PACKAGE_APPLICATION_PLAN.md).
 
 Current implementation constraints:
 
 - Pin supported toolchains; initially validate macOS arm64 and Linux x86-64 in all
   four native optimization modes and both C comparison modes. No Windows claim
-  without a Windows gate. Do not modify either language during the existing audit
-  and standard-library linking work. Test versioned compiler adapters in `luc`.
+  without a Windows gate. Luce language syntax remains unchanged, but the Luce
+  tool must add the versioned `run --sandbox` boundary. Test versioned compiler
+  adapters in `luc`.
 - Native worker state may cross threads only under its ownership contract; Luce
   managed references stay worker-local. No unbounded per-request threads.
 - Public clients require verified HTTPS. The external proxy does not provide the
@@ -71,9 +78,9 @@ Still to design/review, so M0 is not complete:
   freshness/rotation policy. ML-DSA-65 LRS1/LRS2 release signatures and LRS2
   source-manifest agreement are implemented; remaining record kinds and root
   trust metadata are not all implemented.
-- Shared normalized lock contents on top of frozen `luc.lock` TOML. First-slice
-  `luce-pkg` encodes origin/name/version/digest/compiler; hostile-input and
-  archive/cache work remain.
+- Canonical Prism `package.prisma` and `luc.lock` schemas, named outcomes,
+  install context/plan/receipt schemas, recipe-file digest binding and migration
+  from the implemented TOML slice. Hostile-input and archive/cache work remain.
 - Git packs/refs/Smart HTTP, SHAttered-prefix rejection in the object store, and
   advertised capability/resource limits. Blob SHA-1 object IDs exist.
 - Exact proxy/backend trust, headers, framing, certificate policy and deployment
