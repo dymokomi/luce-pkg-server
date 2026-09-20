@@ -1,4 +1,5 @@
 """Real stock Git client against native HTTP receive-pack; no runtime Git dependency."""
+import base64
 import os
 from pathlib import Path
 import subprocess
@@ -8,22 +9,29 @@ import zlib
 from object_http import transfer
 
 
-def check(port, headers, root, request, create_repository=None):
+def check(port, session_headers, token, read_token, root, request, create_repository=None):
     if create_repository is None:
-        assert request(port, 'POST', '/v1/repositories', {'name': 'git-wire'}, headers)[0] == 201
+        assert request(port, 'POST', '/v1/repositories', {'name': 'git-wire'}, session_headers)[0] == 201
     else:
         create_repository('git-wire')
     endpoint = f'http://127.0.0.1:{port}/git/testuser/git-wire'
+    headers = {'Authorization': 'Basic ' + base64.b64encode(b'testuser:' + token).decode()}
+    read_headers = {'Authorization': 'Basic ' + base64.b64encode(b'testuser:' + read_token).decode()}
     assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack')[0] == 401
-    assert request(port, 'GET', '/git/testadmin/git-wire/info/refs?service=git-receive-pack', headers=headers)[0] == 403
+    assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack', headers=session_headers)[0] == 401
+    assert request(port, 'GET', '/git/testadmin/git-wire/info/refs?service=git-receive-pack', headers=headers)[0] == 401
     assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=bad', headers=headers)[0] == 403
+    assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack', headers=read_headers)[0] == 401
+    assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-upload-pack', headers=read_headers)[0] == 200
     assert request(port, 'HEAD', '/git/testuser/git-wire/info/refs?service=git-receive-pack', headers=headers) == (200, b'')
     repo = root / 'git-client'
+    askpass = root / 'git-askpass.sh'
+    askpass.write_text('#!/bin/sh\ncase "$1" in\n  *Username*) printf "%s\\n" "$LUCE_GIT_USERNAME" ;;\n  *Password*) printf "%s\\n" "$LUCE_GIT_TOKEN" ;;\n  *) exit 1 ;;\nesac\n')
+    askpass.chmod(0o700)
     env = dict(os.environ, GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull,
                GIT_TERMINAL_PROMPT='0', GIT_AUTHOR_NAME='Fixture', GIT_AUTHOR_EMAIL='fixture@example.test',
                GIT_COMMITTER_NAME='Fixture', GIT_COMMITTER_EMAIL='fixture@example.test',
-               GIT_CONFIG_COUNT='1', GIT_CONFIG_KEY_0='http.extraHeader',
-               GIT_CONFIG_VALUE_0='Authorization: ' + headers['Authorization'],
+               GIT_ASKPASS=str(askpass), LUCE_GIT_USERNAME='testuser', LUCE_GIT_TOKEN=token.decode(),
                GIT_TRACE_PACKET='1')
 
     def git(*args, success=True, input=None):
@@ -52,6 +60,7 @@ language = "luce-base"
     git('add', 'main.lucb', 'luce.toml', 'large.txt')
     git('commit', '-qm', 'initial native registry fixture')
     git('remote', 'add', 'origin', endpoint)
+    assert token not in (repo / '.git/config').read_bytes()
     git('push', '--porcelain', 'origin', 'main')
     clone = root / 'git-clone'
     git('clone', endpoint, str(clone))

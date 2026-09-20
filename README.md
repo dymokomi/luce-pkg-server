@@ -8,6 +8,11 @@ sit behind the existing VPS HTTPS proxy.
 A loopback invited-account HTTP API is implemented: `/health`,
 `/v1/identity` (verified bearer identity, never proxy-header identity),
 single-use `/v1/invites/redeem`, `/v1/sessions` and `/v1/sessions/revoke`.
+Interactive sessions can mint and independently revoke 256-bit credentials through
+`/v1/credentials` and `/v1/credentials/revoke`. Each credential is bound to one
+repository, a 1-minute-to-90-day absolute lifetime, and exactly one Git or package
+read/write scope. Only its SHA-256-derived storage key is persisted. Git uses the
+credential as an HTTP Basic password; package APIs use it as a Bearer token.
 Authenticated `POST /v1/repositories` accepts exactly `{"name":"package-name"}`
 and creates a private repository owned by the verified session user. It returns
 201 on creation, 409 on duplicate/concurrent conflict, 400 for invalid fields,
@@ -42,8 +47,9 @@ expired sessions and legacy sessions without timestamps are unauthorized. The
 auth library independently validates token syntax before any storage operation.
 Only SHA-256-derived session identifiers are stored; raw bearer values never
 appear in Prism paths or fields, and old raw-token-keyed records fail closed.
-Per-account rate limits, session cleanup and production credential policy are
-pending. Native ML-DSA-65 release signatures are implemented below.
+Per-account rate limits, expired-record cleanup, credential listing/labels and
+account-wide emergency revocation remain pending. Native ML-DSA-65 release
+signatures are implemented below.
 
 Account signing-key enrollment uses native ML-DSA-65. Set `LUCE_REGISTRY_ORIGIN`
 to the exact canonical origin clients sign (for example `https://pkg.luciaos.com`);
@@ -141,11 +147,12 @@ not exposed. Reads currently require the repository owner and verify stored
 identity, signature and source digest before returning any component as an owning
 Value. This historical key is not independently trusted publisher-key distribution.
 
-### Signed-release HTTP (owner-authenticated development API)
+### Signed-release HTTP (scoped-credential development API)
 
-`POST /v1/releases/{owner}/{name}` requires a live bearer session for that owner,
-an enrolled signing key, configured `LUCE_REGISTRY_ORIGIN`, and Content-Type
-`application/octet-stream`. The upload uses the following LRP1 envelope:
+`POST /v1/releases/{owner}/{name}` requires a live `package:publish` Bearer
+credential bound to that owner and repository, an enrolled signing key, configured
+`LUCE_REGISTRY_ORIGIN`, and Content-Type `application/octet-stream`. The upload
+uses the following LRP1 envelope:
 
 | Offset | Bytes | Content |
 | --- | ---: | --- |
@@ -159,9 +166,9 @@ an enrolled signing key, configured `LUCE_REGISTRY_ORIGIN`, and Content-Type
 The signed metadata selects the version; origin and qualified owner/name must
 match trusted configuration and route identity. Host/forwarded headers never
 override either. The handler reads bounded chunks into a bounded whole-envelope
-buffer, then rechecks the live session/principal before calling the storage core.
+buffer, then rechecks the live credential/principal before calling the storage core.
 It does not provide early authentication before transport spooling or atomic
-session-revocation ordering throughout publication; ingress rate/quota limits and
+credential-revocation ordering throughout publication; ingress rate/quota limits and
 stronger long-operation authorization remain deployment work.
 
 Success is201 `published`, or200 `unchanged` for an exact retry. Invalid
@@ -171,13 +178,14 @@ media type415, and operational/unconfigured-origin failure503. Oversized request
 may be rejected by the transport before handler dispatch. A failure can follow a
 successful commit; retain the exact signed upload and reconcile by download.
 
-`GET /v1/releases/{owner}/{name}/{version}/{part}` uses the same owner session and
-configured origin. Parts are `metadata`, `signature`, `publisher_key`, `source`;
+`GET /v1/releases/{owner}/{name}/{version}/{part}` requires a repository-bound
+`package:read` or `package:publish` Bearer credential and the configured origin.
+Parts are `metadata`, `signature`, `publisher_key`, `source`;
 each returns verified binary bytes with Cache-Control:no-store. Invalid paths or
 versions400, missing records404, and stored verification failure503. This is not
 an independently trusted publisher-key directory.
 
-`GET /v1/releases/{owner}/{name}` returns the authenticated owner's available
+`GET /v1/releases/{owner}/{name}` uses the same package-read authorization and returns the owner's available
 versions in canonical descending semantic-version order as
 `application/vnd.luce.versions`. The bounded LPV1 body is `LPV1`, a little-endian
 u16 count, then count repetitions of one u8 byte length followed by a canonical
@@ -281,16 +289,18 @@ Smart HTTP receive-pack v0 is exposed at `/git/{owner}/{name}`: authenticated
 `GET info/refs?service=git-receive-pack` returns sorted snapshot refs/capabilities,
 and `POST git-receive-pack` consumes the standard request media type and returns
 packet-line report-status when requested. Status capacity is reserved before ref
-mutation; all responses prohibit caching. The transport uses the existing bearer
-session header (stock Git supports `http.extraHeader`); no Basic-password or
-credential-helper integration is claimed. Tests use disposable tokens passed in
-process environment rather than command-line arguments. Real stock Git tests
+mutation; all responses prohibit caching. The transport challenges with standard
+HTTP Basic authentication. The username must equal the route owner and the
+password must be a live `git:write` credential bound to that exact repository;
+raw passwords, session tokens and credentials for other repositories/scopes fail
+closed. Tests use stock Git's askpass/credential flow with disposable tokens passed
+in process environment, never URL/config/argv. Real stock Git tests
 cover initial/incremental push with large similar blobs, atomic multi-ref/tag creation, deletion,
 up-to-date discovery, sorted refs, rejection reports and restart persistence.
 This follows [Git's HTTP protocol](https://git-scm.com/docs/gitprotocol-http).
 Smart HTTP upload-pack v0 is also exposed through `GET/HEAD info/refs?service=git-upload-pack`
-and `POST git-upload-pack`, with the same bearer ownership checks and no-store
-responses. Discovery peels annotated tags, including nested tags, and emits HEAD
+and `POST git-upload-pack`, with `git:read` or `git:write` Basic credentials and
+no-store responses. Discovery peels annotated tags, including nested tags, and emits HEAD
 plus `symref=HEAD:refs/heads/main` when `main` exists. The current default-branch
 policy is fixed to `main`, not a configurable persisted symbolic-ref API; missing
 `main` means no advertised HEAD. Git protocol v2 is not negotiated. Clone/fetch

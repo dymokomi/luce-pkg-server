@@ -366,6 +366,16 @@ pub func list_versions(database: db.Database*, principal: str, owner: str, name:
 func bytes_value(bytes: const u8[]) -> interop.Reference[prism.Value]!:
     return try prism.Value.array(prism.DType.uint8, [(i64)bytes.length], bytes)
 
+## A committed Prism layer is already journal-durable. A concurrent checkpoint
+## can hold the single writer admission slot; that must not turn a confirmed
+## immutable publication into an ambiguous HTTP failure. Other checkpoint
+## failures still propagate because they can indicate a real persistence fault.
+func bake_committed(database: db.Database*) -> !:
+    discard(database.bake(wait_ms = 1000) catch failure:
+        if failure.code == prism.busy or failure.code == prism.timed_out:
+            recover -1
+        error(failure.code, failure.message))
+
 ## Principal is supplied by authenticated transport, never request metadata.
 ## Exact retries are idempotent; a version can never be replaced. The signed
 ## commit must already exist in this repository and the pack must stand alone.
@@ -415,7 +425,7 @@ pub func publish_release(database: db.Database*, principal: str, owner: str, nam
         defer existing_key.release()
         if not same(existing_metadata.value().bytes(), metadata) or not same(existing_signature.value().bytes(), signature) or not same(existing_source.value().bytes(), source) or not same(existing_key.value().bytes(), key.value().bytes()):
             error(prism.conflict, "release version is immutable")
-        discard(try database.bake(wait_ms = 1000))
+        try bake_committed(database)
         return false
     var root_buffer: u8[208]
     let root = try join([path, "/releases"], root_buffer)
@@ -445,7 +455,7 @@ pub func publish_release(database: db.Database*, principal: str, owner: str, nam
         try tx.value().set(location, "size", size)
         try tx.value().set(location, "chunks", chunk_value)
     discard(try tx.value().commit(wait_ms = 1000))
-    discard(try database.bake(wait_ms = 1000))
+    try bake_committed(database)
     return true
 
 ## Owning byte array. Verify stored signature, identity and source digest before

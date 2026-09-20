@@ -1,0 +1,47 @@
+import auth
+import http_credentials as http_auth
+
+func rejected(header: str):
+    var output: u8[128]
+    var failed = false
+    let result: http_auth.BasicCredentials? = http_auth.decode_basic(header, output) catch failure:
+        assert(failure.code == auth.invalid)
+        failed = true
+        recover none
+    if let value = result:
+        discard(value)
+        assert(false)
+    assert(failed)
+
+func rejected_small(header: str, size: usize):
+    var storage: u8[2]
+    var failed = false
+    let result: http_auth.BasicCredentials? = http_auth.decode_basic(header, storage[..<size]) catch failure:
+        assert(failure.code == auth.invalid)
+        failed = true
+        recover none
+    if let value = result:
+        discard(value)
+        assert(false)
+    assert(failed)
+
+pub func main(arguments: str[]) -> i32!:
+    discard(arguments)
+    var output: u8[128]
+    let first = try http_auth.decode_basic("Basic YWxpY2U6ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZg==", output)
+    assert(first.username == "alice")
+    assert(first.token == "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff")
+    let second = try http_auth.decode_basic("Basic YTowMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAw", output)
+    assert(second.username == "a")
+    assert(second.token == "0000000000000000000000000000000000000000000000000000000000000000")
+    for bad in ["", "Bearer secret", "Basic ", "Basic abc", "Basic !!!!",
+                "Basic YWxpY2U6ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZg=A",
+                "Basic YWxpY2U6ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZg=A",
+                "Basic YWxpY2U6ZmZm",
+                "Basic YWxpY2U6QUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQUFBQQ=="]:
+        rejected(bad)
+    rejected_small("Basic YWI=", 0)
+    rejected_small("Basic YWI=", 1)
+    rejected_small("Basic YWJj", 2)
+    print("PASS strict canonical Basic Git credential decoding")
+    return 0

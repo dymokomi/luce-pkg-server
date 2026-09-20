@@ -1,0 +1,72 @@
+## Strict HTTP Basic decoding for stock Git credentials. Returned strings borrow
+## the caller-provided output buffer and must not outlive it.
+import auth
+import strings
+
+pub struct BasicCredentials:
+    pub var username: str
+    pub var token: str
+
+func base64_value(byte: u8) -> usize!:
+    if byte >= 'A' and byte <= 'Z': return (usize)(byte - 'A')
+    if byte >= 'a' and byte <= 'z': return 26 + (usize)(byte - 'a')
+    if byte >= '0' and byte <= '9': return 52 + (usize)(byte - '0')
+    if byte == '+': return 62
+    if byte == '/': return 63
+    error(auth.invalid, "invalid Basic credentials")
+
+func valid_username(value: str) -> bool:
+    if value.length == 0 or value.length > 32: return false
+    for byte in value.bytes:
+        if not ((byte >= 'a' and byte <= 'z') or (byte >= '0' and byte <= '9') or byte == '_'): return false
+    return true
+
+func valid_token(value: str) -> bool:
+    if value.length != 64: return false
+    for byte in value.bytes:
+        if not ((byte >= '0' and byte <= '9') or (byte >= 'a' and byte <= 'f')): return false
+    return true
+
+pub func decode_basic(header: str, output: u8[]) -> BasicCredentials!:
+    if not strings.starts_with(header, "Basic "): error(auth.invalid, "Basic credentials required")
+    let encoded = header.bytes[6..]
+    if encoded.length == 0 or encoded.length % 4 != 0: error(auth.invalid, "invalid Basic credentials")
+    var used: usize = 0
+    var at: usize = 0
+    while at < encoded.length:
+        let final = at + 4 == encoded.length
+        let a = try base64_value(encoded[at])
+        let b = try base64_value(encoded[at + 1])
+        let pad_c = encoded[at + 2] == '='
+        let pad_d = encoded[at + 3] == '='
+        if pad_c:
+            if not final or not pad_d or (b & 15) != 0: error(auth.invalid, "invalid Basic credentials")
+            if used >= output.length: error(auth.invalid, "Basic credentials are too long")
+            output[used] = (u8)((a << 2) | (b >> 4))
+            used += 1
+        else:
+            let c = try base64_value(encoded[at + 2])
+            if pad_d:
+                if not final or (c & 3) != 0: error(auth.invalid, "invalid Basic credentials")
+                if output.length < 2 or used > output.length - 2: error(auth.invalid, "Basic credentials are too long")
+                output[used] = (u8)((a << 2) | (b >> 4))
+                output[used + 1] = (u8)((b << 4) | (c >> 2))
+                used += 2
+            else:
+                let d = try base64_value(encoded[at + 3])
+                if output.length < 3 or used > output.length - 3: error(auth.invalid, "Basic credentials are too long")
+                output[used] = (u8)((a << 2) | (b >> 4))
+                output[used + 1] = (u8)((b << 4) | (c >> 2))
+                output[used + 2] = (u8)((c << 6) | d)
+                used += 3
+        at += 4
+    var colon: usize = used
+    for i in 0..<used:
+        if output[i] == ':':
+            if colon != used: error(auth.invalid, "invalid Basic credentials")
+            colon = i
+    if colon == used: error(auth.invalid, "invalid Basic credentials")
+    let username = (str)output[..<colon]
+    let token = (str)output[colon + 1..<used]
+    if not valid_username(username) or not valid_token(token): error(auth.invalid, "invalid Basic credentials")
+    return BasicCredentials(username = username, token = token)
