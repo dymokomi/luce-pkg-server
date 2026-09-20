@@ -66,6 +66,8 @@ jobs:
           python3 tests/run_repositories.py --fixture receive --mode sanitize 2>&1 | tee build/receive-sanitize-ci.log
           python3 tests/run_repositories.py --fixture releases 2>&1 | tee build/releases-ci.log
           python3 tests/run_repositories.py --fixture releases --mode sanitize 2>&1 | tee build/releases-sanitize-ci.log
+          python3 tests/run_repositories.py --fixture pull_requests 2>&1 | tee build/pull-requests-ci.log
+          python3 tests/run_repositories.py --fixture pull_requests --mode sanitize 2>&1 | tee build/pull-requests-sanitize-ci.log
           python3 tests/run_repositories.py --fixture large_objects 2>&1 | tee build/large-objects-ci.log
           python3 tests/run_repositories.py --fixture large_objects --mode sanitize 2>&1 | tee build/large-objects-sanitize-ci.log
       - name: Repository native heap cleanup
@@ -79,6 +81,7 @@ jobs:
           python3 tests/run_repositories.py --fixture graph --mode native0 --heap 2>&1 | tee build/graph-heap-ci.log
           python3 tests/run_repositories.py --fixture receive --mode native0 --heap 2>&1 | tee build/receive-heap-ci.log
           python3 tests/run_repositories.py --fixture releases --mode native0 --heap 2>&1 | tee build/releases-heap-ci.log
+          python3 tests/run_repositories.py --fixture pull_requests --mode native0 --heap 2>&1 | tee build/pull-requests-heap-ci.log
           python3 tests/run_repositories.py --fixture large_objects --mode native0 --heap 2>&1 | tee build/large-objects-heap-ci.log
       - name: Heap-tool process lifecycle regression
         if: always()
@@ -117,6 +120,7 @@ jobs:
             luce-pkg-server/build/graph*.log
             luce-pkg-server/build/receive*.log
             luce-pkg-server/build/releases*.log
+            luce-pkg-server/build/pull-requests*.log
             luce-pkg-server/build/large-objects-ci.log
             luce-pkg-server/build/large-objects-sanitize-ci.log
             luce-pkg-server/build/large-objects-heap-ci.log

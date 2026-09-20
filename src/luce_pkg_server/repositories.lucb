@@ -9,10 +9,45 @@ import strings
 import crypto_native
 import memory
 import pkg
+import time
+import utf8
 import luce_pkg_server.release_pack as release_pack
 
 pub let max_object_bytes: usize = 67108864
 pub let chunk_bytes: usize = 1048576
+pub let max_pull_requests: usize = 256
+pub let max_pull_request_title: usize = 256
+pub let max_pull_request_body: usize = 8192
+pub let max_pull_request_branch: usize = 255
+
+pub enum PullRequestState as u8:
+    unknown = 0
+    open = 1
+    closed = 2
+    merged = 3
+
+## A bounded copy of a persisted review record. Branches are short names (without
+## refs/heads/); commit IDs are the immutable tips captured at creation/merge.
+pub struct PullRequest:
+    pub var number: i64
+    pub var author: u8[32]
+    pub var author_length: usize
+    pub var title: u8[256]
+    pub var title_length: usize
+    pub var body: u8[8192]
+    pub var body_length: usize
+    pub var base: u8[255]
+    pub var base_length: usize
+    pub var head: u8[255]
+    pub var head_length: usize
+    pub var base_id: u8[20]
+    pub var head_id: u8[20]
+    pub var merge_id: u8[20]
+    pub var state: PullRequestState
+    pub var created_at: i64
+    pub var updated_at: i64
+    pub var closed_by: u8[32]
+    pub var closed_by_length: usize
 
 func valid_owner(value: str) -> bool:
     if value.length == 0 or value.length > 32: return false
@@ -1047,5 +1082,304 @@ pub func update_refs(database: db.Database*, principal: str, owner: str, name: s
             defer id.release()
             try tx.value().set(location, "name", label)
             try tx.value().set(location, "id", id)
+    discard(try tx.value().commit(wait_ms = 1000))
+    discard(try database.bake(wait_ms = 1000))
+
+func valid_pull_request_branch(name: str) -> bool:
+    if name.length == 0 or name.length > max_pull_request_branch or strings.starts_with(name, "refs/"): return false
+    var buffer: u8[266]
+    let prefix = b"refs/heads/"
+    for i in 0..<prefix.length: buffer[i] = prefix[i]
+    for i in 0..<name.length: buffer[prefix.length + i] = name.bytes[i]
+    return git.valid_ref((str)buffer[..<prefix.length + name.length])
+
+func branch_ref(name: str, output: u8[]) -> str!:
+    if not valid_pull_request_branch(name): error(prism.invalid, "invalid pull request branch")
+    return try join(["refs/heads/", name], output)
+
+func valid_pull_request_text(title: str, body: str) -> bool:
+    if title.length == 0 or title.length > max_pull_request_title or body.length > max_pull_request_body:
+        return false
+    if not utf8.valid(title.bytes) or not utf8.valid(body.bytes): return false
+    for byte in title.bytes:
+        if byte < 32 or byte == 127: return false
+    return true
+
+func pull_request_root(path: str, output: u8[]) -> str!:
+    return try join([path, "/pull_requests"], output)
+
+func pull_request_path(root: str, number: i64, output: u8[]) -> str!:
+    if number <= 0 or number > (i64)max_pull_requests: error(prism.invalid, "invalid pull request number")
+    var label: u8[24]
+    let suffix = try format(label, f"/p{number}")
+    return try join([root, suffix], output)
+
+func copy_pull_request_text(value: str, output: u8[], used: usize*) -> !:
+    if value.length > output.length or not utf8.valid(value.bytes): error(prism.invalid, "invalid stored pull request text")
+    for i in 0..<value.length: output[i] = value.bytes[i]
+    *used = value.length
+
+func read_pull_request(session: prism.Session*, location: str, output: PullRequest*) -> !:
+    let number = try session.get(location, "number")
+    defer number.release()
+    output.number = try number.value().integer_at()
+    let author = try session.get(location, "author")
+    defer author.release()
+    try copy_pull_request_text(try author.value().text_at(), output.author, &output.author_length)
+    let title = try session.get(location, "title")
+    defer title.release()
+    try copy_pull_request_text(try title.value().text_at(), output.title, &output.title_length)
+    let body = try session.get(location, "body")
+    defer body.release()
+    try copy_pull_request_text(try body.value().text_at(), output.body, &output.body_length)
+    let base = try session.get(location, "base")
+    defer base.release()
+    try copy_pull_request_text(try base.value().text_at(), output.base, &output.base_length)
+    let head = try session.get(location, "head")
+    defer head.release()
+    try copy_pull_request_text(try head.value().text_at(), output.head, &output.head_length)
+    let base_id = try session.get(location, "base_id")
+    defer base_id.release()
+    let head_id = try session.get(location, "head_id")
+    defer head_id.release()
+    let merge_id = try session.get(location, "merge_id")
+    defer merge_id.release()
+    if base_id.value().bytes().length != 20 or head_id.value().bytes().length != 20 or merge_id.value().bytes().length != 20:
+        error(prism.invalid, "invalid stored pull request identity")
+    for i in 0..<(usize)20:
+        output.base_id[i] = base_id.value().bytes()[i]
+        output.head_id[i] = head_id.value().bytes()[i]
+        output.merge_id[i] = merge_id.value().bytes()[i]
+    let state = try session.get(location, "state")
+    defer state.release()
+    let state_text = try state.value().text_at()
+    if state_text == "open": output.state = .open
+    elif state_text == "closed": output.state = .closed
+    elif state_text == "merged": output.state = .merged
+    else: error(prism.invalid, "invalid stored pull request state")
+    let created = try session.get(location, "created_at")
+    defer created.release()
+    output.created_at = try created.value().integer_at()
+    let updated = try session.get(location, "updated_at")
+    defer updated.release()
+    output.updated_at = try updated.value().integer_at()
+    let closed_by = try session.get(location, "closed_by")
+    defer closed_by.release()
+    try copy_pull_request_text(try closed_by.value().text_at(), output.closed_by, &output.closed_by_length)
+    let invalid_record = output.number <= 0 or output.number > (i64)max_pull_requests or not valid_owner((str)output.author[..<output.author_length]) or not valid_pull_request_text((str)output.title[..<output.title_length], (str)output.body[..<output.body_length]) or not valid_pull_request_branch((str)output.base[..<output.base_length]) or not valid_pull_request_branch((str)output.head[..<output.head_length]) or output.created_at <= 0 or output.updated_at < output.created_at
+    if invalid_record:
+        error(prism.invalid, "invalid stored pull request")
+    if output.closed_by_length != 0 and not valid_owner((str)output.closed_by[..<output.closed_by_length]):
+        error(prism.invalid, "invalid stored pull request closer")
+
+func set_pull_request_value(tx: prism.Session*, location: str, name: str, value: str) -> !:
+    let stored = try prism.Value.text(value)
+    defer stored.release()
+    try tx.set(location, name, stored)
+
+func set_pull_request_integer(tx: prism.Session*, location: str, name: str, value: i64) -> !:
+    let stored = try prism.Value.integer(value)
+    defer stored.release()
+    try tx.set(location, name, stored)
+
+func set_pull_request_id(tx: prism.Session*, location: str, name: str, value: const u8[]) -> !:
+    if value.length != 20: error(prism.invalid, "invalid pull request identity")
+    let stored = try prism.Value.array(prism.DType.uint8, [20], value)
+    defer stored.release()
+    try tx.set(location, name, stored)
+
+## Create a branch-to-branch review in one repository. This intentionally has no
+## fork relationship or cross-repository head. Ref tips are captured atomically
+## with the review record; Git remains responsible for creating/updating branches.
+pub func create_pull_request(database: db.Database*, principal: str, owner: str, name: str,
+    base: str, head: str, title: str, body: str) -> i64!:
+    if not valid_pull_request_branch(base) or not valid_pull_request_branch(head) or base == head or not valid_pull_request_text(title, body):
+        error(prism.invalid, "invalid pull request")
+    var path_buffer: u8[192]
+    let path = try repo_path(principal, owner, name, path_buffer)
+    var pr_root_buffer: u8[224]
+    let root = try pull_request_root(path, pr_root_buffer)
+    var refs_root_buffer: u8[208]
+    let refs_root = try join([path, "/refs"], refs_root_buffer)
+    var base_ref_buffer: u8[266]
+    var head_ref_buffer: u8[266]
+    let base_ref = try branch_ref(base, base_ref_buffer)
+    let head_ref = try branch_ref(head, head_ref_buffer)
+    var base_location_buffer: u8[2304]
+    var head_location_buffer: u8[2304]
+    let base_location = try ref_path(refs_root, base_ref, base_location_buffer)
+    let head_location = try ref_path(refs_root, head_ref, head_location_buffer)
+    let now = time.unix()
+    if now <= 0: error(prism.invalid, "pull request clock unavailable")
+    let tx = try database.begin()
+    defer tx.release()
+    try require_owner(tx.value(), path, principal)
+    let base_id = try read_ref(tx.value(), base_location, base_ref)
+    defer base_id.release()
+    let head_id = try read_ref(tx.value(), head_location, head_ref)
+    defer head_id.release()
+    let children: interop.Reference[prism.Paths]? = tx.value().children(root) catch failure:
+        if failure.code != prism.missing: error(failure.code, failure.message)
+        recover none
+    var count: usize = 0
+    if let records = children:
+        defer records.release()
+        count = records.value().count()
+        if count >= max_pull_requests: error(prism.invalid, "pull request limit exceeded")
+        for i in 0..<count:
+            let child = try records.value().at(i)
+            var existing: PullRequest
+            try read_pull_request(tx.value(), child, &existing)
+            if existing.state == .open and (str)existing.base[..<existing.base_length] == base and (str)existing.head[..<existing.head_length] == head:
+                error(prism.conflict, "an open pull request already exists for these branches")
+    var number: i64 = 1
+    let next: interop.Reference[prism.Value]? = tx.value().get(path, "next_pull_request") catch failure:
+        if failure.code != prism.missing: error(failure.code, failure.message)
+        recover none
+    if let value = next:
+        defer value.release()
+        number = try value.value().integer_at()
+    if number <= 0 or number > (i64)max_pull_requests or number != (i64)count + 1:
+        error(prism.invalid, "invalid pull request sequence")
+    if not try tx.value().contains(root): try tx.value().add(root, "pull-requests")
+    var location_buffer: u8[256]
+    let location = try pull_request_path(root, number, location_buffer)
+    try tx.value().add(location, "pull-request")
+    try set_pull_request_integer(tx.value(), location, "number", number)
+    try set_pull_request_value(tx.value(), location, "author", principal)
+    try set_pull_request_value(tx.value(), location, "title", title)
+    try set_pull_request_value(tx.value(), location, "body", body)
+    try set_pull_request_value(tx.value(), location, "base", base)
+    try set_pull_request_value(tx.value(), location, "head", head)
+    try set_pull_request_id(tx.value(), location, "base_id", base_id.value().bytes())
+    try set_pull_request_id(tx.value(), location, "head_id", head_id.value().bytes())
+    var no_merge: u8[20]
+    try set_pull_request_id(tx.value(), location, "merge_id", no_merge)
+    try set_pull_request_value(tx.value(), location, "state", "open")
+    try set_pull_request_integer(tx.value(), location, "created_at", now)
+    try set_pull_request_integer(tx.value(), location, "updated_at", now)
+    try set_pull_request_value(tx.value(), location, "closed_by", "")
+    try set_pull_request_integer(tx.value(), path, "next_pull_request", number + 1)
+    let guard = try prism.Value.boolean(true)
+    defer guard.release()
+    try tx.value().set(path, "pull_request_serialization", guard)
+    discard(try tx.value().commit(wait_ms = 1000))
+    discard(try database.bake(wait_ms = 1000))
+    return number
+
+pub func get_pull_request(database: db.Database*, principal: str, owner: str, name: str,
+    number: i64, output: PullRequest*) -> !:
+    var path_buffer: u8[192]
+    let path = try repo_path(principal, owner, name, path_buffer)
+    var root_buffer: u8[224]
+    let root = try pull_request_root(path, root_buffer)
+    var location_buffer: u8[256]
+    let location = try pull_request_path(root, number, location_buffer)
+    let snapshot = try database.snapshot()
+    defer snapshot.release()
+    try require_owner(snapshot.value(), path, principal)
+    try read_pull_request(snapshot.value(), location, output)
+    if output.number != number: error(prism.invalid, "pull request path mismatch")
+
+## Fill at most output.length records, sorted newest-first. The caller chooses the
+## bound; requesting fewer slots than persisted records fails instead of truncating.
+pub func list_pull_requests(database: db.Database*, principal: str, owner: str, name: str,
+    output: PullRequest[]) -> usize!:
+    var path_buffer: u8[192]
+    let path = try repo_path(principal, owner, name, path_buffer)
+    var root_buffer: u8[224]
+    let root = try pull_request_root(path, root_buffer)
+    let snapshot = try database.snapshot()
+    defer snapshot.release()
+    try require_owner(snapshot.value(), path, principal)
+    let children: interop.Reference[prism.Paths]? = snapshot.value().children(root) catch failure:
+        if failure.code != prism.missing: error(failure.code, failure.message)
+        recover none
+    if let records = children:
+        defer records.release()
+        let count = records.value().count()
+        if count > max_pull_requests or count > output.length: error(prism.invalid, "pull request list exceeds output")
+        for i in 0..<count:
+            try read_pull_request(snapshot.value(), try records.value().at(i), &output[i])
+            var at = i
+            while at > 0 and output[at].number > output[at - 1].number:
+                let swap = output[at - 1]
+                output[at - 1] = output[at]
+                output[at] = swap
+                at -= 1
+        return count
+    return 0
+
+func commit_contains(session: prism.Session*, path: str, ancestor: const u8[], descendant: const u8[]) -> bool!:
+    let nodes = try alloc GraphNode[4096] in memory.heap
+    defer free(nodes) in memory.heap
+    let slots = try alloc usize[8192] in memory.heap
+    defer free(slots) in memory.heap
+    for i in 0..<(usize)8192: slots[i] = 0
+    var graph = Graph(nodes = nodes, slots = slots, count = 0, edges = 0, probes = 0)
+    try graph.add(descendant, 3)
+    var at: usize = 0
+    var total: usize = 0
+    while at < graph.count:
+        if same(graph.nodes[at].id, ancestor): return true
+        let value = try checked_object(session, path, graph.nodes[at].id)
+        defer value.release()
+        let wire = value.value().bytes()
+        if wire.length > 268435456 - total: error(prism.invalid, "pull request graph byte limit exceeded")
+        total += wire.length
+        let object = try git.decode_object(wire)
+        if object.kind != "commit": error(prism.invalid, "pull request branch does not identify a commit")
+        let commit = try git.decode_commit(object.payload)
+        for i in 0..<commit.parent_count: try graph.add_hex(try commit.parent(i), 3)
+        at += 1
+    return false
+
+## State transitions are owner-authorized. "merged" is accepted only after the
+## current base branch contains the current head branch; this API never performs
+## a merge or mutates Git refs. Merged records are terminal.
+pub func set_pull_request_state(database: db.Database*, principal: str, owner: str, name: str,
+    number: i64, state: PullRequestState) -> !:
+    var path_buffer: u8[192]
+    let path = try repo_path(principal, owner, name, path_buffer)
+    var root_buffer: u8[224]
+    let root = try pull_request_root(path, root_buffer)
+    var location_buffer: u8[256]
+    let location = try pull_request_path(root, number, location_buffer)
+    let now = time.unix()
+    if now <= 0: error(prism.invalid, "pull request clock unavailable")
+    let tx = try database.begin()
+    defer tx.release()
+    try require_owner(tx.value(), path, principal)
+    var current: PullRequest
+    try read_pull_request(tx.value(), location, &current)
+    if current.number != number: error(prism.invalid, "pull request path mismatch")
+    if current.state == .merged: error(prism.conflict, "merged pull request is immutable")
+    if state == current.state: return
+    if state != .open and state != .closed and state != .merged: error(prism.invalid, "invalid pull request state")
+    if state == .merged:
+        var refs_root_buffer: u8[208]
+        let refs_root = try join([path, "/refs"], refs_root_buffer)
+        var base_ref_buffer: u8[266]
+        var head_ref_buffer: u8[266]
+        let base_ref = try branch_ref((str)current.base[..<current.base_length], base_ref_buffer)
+        let head_ref = try branch_ref((str)current.head[..<current.head_length], head_ref_buffer)
+        var base_location_buffer: u8[2304]
+        var head_location_buffer: u8[2304]
+        let base_location = try ref_path(refs_root, base_ref, base_location_buffer)
+        let head_location = try ref_path(refs_root, head_ref, head_location_buffer)
+        let base_id = try read_ref(tx.value(), base_location, base_ref)
+        defer base_id.release()
+        let head_id = try read_ref(tx.value(), head_location, head_ref)
+        defer head_id.release()
+        if not try commit_contains(tx.value(), path, head_id.value().bytes(), base_id.value().bytes()):
+            error(prism.conflict, "base branch does not contain pull request head")
+        try set_pull_request_id(tx.value(), location, "head_id", head_id.value().bytes())
+        try set_pull_request_id(tx.value(), location, "merge_id", base_id.value().bytes())
+    try set_pull_request_value(tx.value(), location, "state", "open" if state == .open else ("closed" if state == .closed else "merged"))
+    try set_pull_request_value(tx.value(), location, "closed_by", "" if state == .open else principal)
+    try set_pull_request_integer(tx.value(), location, "updated_at", now)
+    let guard = try prism.Value.boolean(true)
+    defer guard.release()
+    try tx.value().set(path, "pull_request_serialization", guard)
     discard(try tx.value().commit(wait_ms = 1000))
     discard(try database.bake(wait_ms = 1000))

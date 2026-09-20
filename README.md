@@ -328,6 +328,30 @@ tokens are `ofs-delta`, `no-progress`, `object-format=sha1`, and informational
 Tag peeling validates object IDs and target kinds, is limited to 64 tag levels,
 and shares a 64 MiB object-byte budget per discovery/authorization operation.
 
+Pull requests are same-repository, branch-to-branch review records; there is no
+fork resource, fork relationship, or cross-repository head. A verified owner
+session creates one with `POST /v1/repositories/{owner}/{name}/pull-requests`
+and exactly `{"base":"main","head":"topic","title":"...","body":"..."}`.
+`GET` on that collection returns newest-first JSON; `GET` on the same path plus
+`/{number}` returns one record. `POST` to the item with exactly
+`{"state":"open|closed|merged"}` changes its state. Git branches are created,
+updated and merged through ordinary Smart HTTP, not by the review API.
+
+Creation atomically captures both branch tips, rejects missing/same branches and
+duplicate open base/head pairs, and assigns an immutable repository-local number.
+Titles are 1–256 bytes of valid single-line UTF-8; bodies are valid UTF-8 through
+8192 bytes. At most 256 retained records are allowed per repository; records are
+never deleted or renumbered. Closing and reopening preserve captured identities.
+Marking a record merged succeeds only when a bounded commit walk proves that the
+current base tip contains the current head tip, records that base tip as the merge
+commit, and makes the record terminal. The API never synthesizes a merge commit.
+Repository access remains owner-only in this slice, so collaborator branch ACLs
+must be implemented before third-party authors can participate. Session, proxy,
+storage-failure and ambiguous-commit rules are the same as repository creation.
+Core tests cover persistence, IPC, concurrent duplicate creation, malformed and
+bounded input, state transitions, ancestry refusal and terminal merges; HTTP tests
+exercise the workflow using real stock-Git branches and registry restart.
+
 Every expected ID and the final namespace is checked before one transaction is
 committed. Prefix conflicts (`topic` versus `topic/child`) are rejected, including
 concurrent creation. A shared per-repository marker write forces competing batches

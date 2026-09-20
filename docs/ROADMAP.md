@@ -21,6 +21,7 @@ are not hidden production implementations. External Git and SQLite remain unsele
 | M3b | `luce-tls` / `luce-http-client` | Native verified HTTPS; certificate/hostname/trust/redirect failures; review before real credentials |
 | M4 | Invited account API / operator CLI | Registration proof + one-use invite, concurrent duplicate/expired/revoked claims, scoped tokens and redacted logs |
 | M5 | Git hosting | Standard HTTPS clone/fetch/push, ACL/ref/object isolation, aborted/concurrent pushes and bounded resource use |
+| M5b | Pull requests without forks | Same-repository branch reviews, durable state, concurrent numbering, bounded ancestry-verified merge state and stock-Git/HTTP tests; collaborator ACLs remain separate |
 | M6 | Signed package releases | Authorized release-from-commit, immutable versions, tamper/replay/rollback rejection and DB/object consistency |
 | M7 | Local `luc` libraries and applications | Compiler adapters, sandboxed `install.luc`, staged installs/receipts, fresh import/link/build and `luced` application acceptance |
 | M8 | Remote `luc` integration | Verified publish/add/lock/sync/install/x against signed releases with both toolchains and offline/relocated replay |

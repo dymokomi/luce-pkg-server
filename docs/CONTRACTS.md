@@ -42,6 +42,21 @@ account-key/vault contract below; integration and verification remain required.
   alias SHA-1 and SHA-256 object IDs.
 - SHA-256 Git is a later advertised capability, not implied by SHA-256 releases.
 
+## Pull requests without forks
+
+- v1 pull requests reference two `refs/heads/*` branches in the same repository.
+  Short branch names are stored; `refs/`-prefixed inputs are rejected.
+- There is no fork object, fork API, implicit repository copy, or cross-repository
+  source. Ordinary Git owns commits, branches, pushes and merges.
+- Creation captures base/head commit IDs atomically and assigns a monotonic local
+  number. One open record per exact base/head pair is allowed.
+- States are `open`, `closed`, and terminal `merged`. A merged transition is only
+  recorded after the current base commit is proven to contain the current head by
+  a bounded native commit-ancestry walk. The server does not create merge commits.
+- Current repository ACLs remain owner-only. Collaborator permissions are a later
+  prerequisite for PR authors other than the owner; review APIs do not widen Git
+  read/write access.
+
 ## Application identity records
 
 Binary little-endian, exact EOF, not high-level object serialization.

@@ -15,6 +15,7 @@ import object_http
 import git_http
 import key_http
 import release_http
+import pull_request_http
 
 binary, fixture, client = [Path(arg).resolve() for arg in sys.argv[1:4]]
 registration_client = Path(sys.argv[4]).resolve() if len(sys.argv) == 5 else None
@@ -152,6 +153,9 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-upload-pack',
                            headers=git_headers('testuser', temporary_git))[0] == 401
             git_commit = git_http.check(port, headers, git_token, git_read_token, root, request)
+            pull_request_expected = pull_request_http.check(
+                port, headers, admin_headers, git_token, root, request)
+            git_commit = pull_request_expected['merge_commit'].encode()
             package_publish_token, package_publish_headers = issue_credential(port, headers, 'package:publish', 'git-wire')
             package_read_token, package_read_headers = issue_credential(port, headers, 'package:read', 'git-wire')
             _, admin_package_headers = issue_credential(port, admin_headers, 'package:publish', 'demo')
@@ -234,6 +238,7 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             assert release_http.catalog(request(port, 'GET', '/v1/releases/testuser/git-wire', headers=package_read_headers)[1]) == ['1.2.6', '1.2.5', '1.2.4', '1.2.3']
             status, advertisement = request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack', headers=git_headers('testuser', git_token))
             assert status == 200 and git_commit + b' refs/heads/main' in advertisement
+            pull_request_http.persisted(port, restored_headers, pull_request_expected, request)
             subprocess.run([str(client), str(port)], check=True, timeout=120)
             assert object_http.transfer(port, 'GET', object_path, headers=restored_headers) == (200, object_bytes)
             assert request(port, 'POST', '/v1/repositories', {'name': 'demo'}, restored_headers)[0] == 409
