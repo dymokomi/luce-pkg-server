@@ -24,6 +24,13 @@ def main():
         subprocess.run([str(a) for a in command], cwd=ROOT, env=environment, check=True, timeout=timeout)
     for mode, flags in MODES.items():
         if args.mode not in (mode, "all"): continue
+        if mode == "c":
+            # Two intentionally concurrent Argon2 registrations can exceed the
+            # ordinary per-request guard in the unoptimized generated-C build on
+            # hosted runners. This is a correctness matrix, not a latency SLA.
+            environment["LUCE_TEST_HTTP_TIMEOUT"] = "60"
+        else:
+            environment.pop("LUCE_TEST_HTTP_TIMEOUT", None)
         output = ROOT / "build" / mode
         output.mkdir(parents=True, exist_ok=True)
         print(f"MODE {mode}", flush=True)

@@ -20,7 +20,8 @@ registration_client = Path(sys.argv[4]).resolve() if len(sys.argv) == 5 else Non
 
 def request(port, method, path, value=None, headers=None):
     payload = json.dumps(value).encode() if value is not None else b''
-    connection = http.client.HTTPConnection('127.0.0.1', port, timeout=10)
+    timeout = float(os.environ.get('LUCE_TEST_HTTP_TIMEOUT', '10'))
+    connection = http.client.HTTPConnection('127.0.0.1', port, timeout=timeout)
     try:
         connection.request(method, path, payload, headers or {})
         response = connection.getresponse()
