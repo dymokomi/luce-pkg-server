@@ -75,6 +75,15 @@ struct App:
         defer nonce.release()
         return binary_reply(nonce.value().bytes(), "application/octet-stream")
 
+    func read_key(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
+        let token = bearer(view.value()) catch: return reply("unauthorized", 401)
+        let who = self.authority.value().verify(token) catch: return reply("unauthorized", 401)
+        defer who.release()
+        let result = self.authority.value().signing_key(token) catch: return reply("key unavailable", 503)
+        let key = result else return reply("no signing key", 404)
+        defer key.release()
+        return binary_reply(key.value().bytes(), "application/octet-stream")
+
     func enroll_key(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
         let request = view.value()
         let token = bearer(request) catch: return reply("unauthorized", 401)
@@ -300,6 +309,9 @@ func configure(socket: str) -> interop.Outcome[http.Application]:
     let enroll_key = http.Handler.bind(app, App.enroll_key) catch failure: trap(failure.message)
     defer enroll_key.release()
     router.post("/v1/identity/key", enroll_key) catch failure: trap(failure.message)
+    let read_key = http.Handler.bind(app, App.read_key) catch failure: trap(failure.message)
+    defer read_key.release()
+    router.get("/v1/identity/key", read_key) catch failure: trap(failure.message)
     let redeem = http.Handler.bind(app, App.redeem) catch failure: trap(failure.message)
     defer redeem.release()
     router.post("/v1/invites/redeem", redeem) catch failure: trap(failure.message)

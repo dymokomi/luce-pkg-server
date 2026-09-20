@@ -9,6 +9,8 @@ ORIGIN = 'https://registry.example.test'
 
 
 def check(port, headers, other_headers, fixture):
+    assert transfer(port, 'GET', ENROLL)[0] == 401
+    assert transfer(port, 'GET', ENROLL, headers=headers) == (404, b'no signing key')
     def call(path, body=b'', auth=headers):
         return transfer(port, 'POST', path, body, auth)
 
@@ -46,8 +48,12 @@ def check(port, headers, other_headers, fixture):
     assert sorted(results) == [201, 409], results
     assert call(ENROLL, encoded, binary)[0] == 409
     assert call(CHALLENGE)[0] == 409
+    assert transfer(port, 'GET', ENROLL, headers=headers) == (200, encoded[:1952])
+    assert transfer(port, 'GET', ENROLL, headers=other_headers) == (404, b'no signing key')
     print('PASS native account-key HTTP enrollment, origin binding, replacement and replay', flush=True)
+    return encoded[:1952]
 
 
-def persisted(port, headers):
+def persisted(port, headers, expected):
     assert transfer(port, 'POST', CHALLENGE, headers=headers)[0] == 409
+    assert transfer(port, 'GET', ENROLL, headers=headers) == (200, expected)

@@ -56,11 +56,19 @@ enrollment/transaction conflicts 409, and operational failure 503. All responses
 are no-store. Authentication is checked again inside the mutation transaction.
 One replaceable challenge per account expires after five minutes. First enrollment
 atomically binds the key and consumes the challenge, including across restarts;
-no rotation/recovery or key-distribution endpoint exists yet. A 409 is not proof
+no rotation/recovery or public key-distribution endpoint exists yet. A 409 is not proof
 that a particular key was enrolled. Commit/durability failures may occur after
 publication: do not assume a failed response guarantees unchanged state. Challenge
 rate limiting and public deployment remain pending. These routes have a separate
 5261-byte handler limit; the existing 4 KiB account JSON limits are unchanged.
+
+Authenticated `GET /v1/identity/key` returns that session account's exact1952-byte
+ML-DSA public key as no-store binary, or404 when the authenticated account is
+unbound. Invalid sessions return401; read/storage/malformed-key failures return503,
+never404. No account parameter or proxy-header override is accepted. Authentication
+and key lookup share a snapshot in the auth library. Readback remains available
+when new enrollment is disabled by missing origin configuration. This supports
+reconciling uncertain enrollment responses, not public key discovery or rotation.
 It binds `127.0.0.1` only. This is not `pkg.luciaos.com`, complete Git hosting, signed
 releases or real credentials. A green roadmap check is not an authentication,
 storage, cryptography or deployment gate.

@@ -97,7 +97,7 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
                                                 {'name': 'testadmin', 'password': 'fixture-password'})
             assert admin_status == 200
             admin_headers = {'Authorization': 'Bearer ' + admin_token.decode()}
-            key_http.check(port, headers, admin_headers, fixture)
+            enrolled_key = key_http.check(port, headers, admin_headers, fixture)
             assert request(port, 'POST', endpoint, {'name': 'demo'}, admin_headers)[0] == 201
             object_path, object_bytes = object_http.check(port, headers, admin_headers)
             git_commit = git_http.check(port, headers, root, request)
@@ -109,6 +109,7 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             assert request(port, 'POST', '/v1/sessions/revoke', headers=headers) == (200, b'revoked')
             assert request(port, 'GET', '/v1/identity', headers=headers)[0] == 401
             assert request(port, 'POST', key_http.CHALLENGE, headers=headers)[0] == 401
+            assert request(port, 'GET', key_http.ENROLL, headers=headers)[0] == 401
             assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack', headers=headers)[0] == 401
             assert request(port, 'POST', endpoint, {'name': 'revoked'}, headers)[0] == 401
             assert object_http.transfer(port, 'GET', object_path, headers=headers)[0] == 401
@@ -147,7 +148,7 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             assert status == 200 and len(restored) == 32
             assert request(port, 'GET', '/v1/identity', headers={'Authorization': 'Bearer ' + restored.decode()}) == (200, b'testuser')
             restored_headers = {'Authorization': 'Bearer ' + restored.decode()}
-            key_http.persisted(port, restored_headers)
+            key_http.persisted(port, restored_headers, enrolled_key)
             status, advertisement = request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack', headers=restored_headers)
             assert status == 200 and git_commit + b' refs/heads/main' in advertisement
             subprocess.run([str(client), str(port)], check=True, timeout=120)
