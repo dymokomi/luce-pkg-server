@@ -2,27 +2,53 @@
 import git
 import prism
 import crypto_native as crypto
+import pkg
 
-func require(pack: git.Pack*, id: const u8[], kind: str, budget: usize*) -> !:
+func payload(pack: git.Pack*, id: const u8[], kind: str, budget: usize*) -> const u8[]!:
     for item in pack.items:
         if *budget == 0: error(prism.invalid, "release graph work limit exceeded")
         *budget -= 1
         if crypto.equal(item.id, id):
             if item.kind != kind: error(prism.invalid, "release graph type mismatch")
-            return
+            return item.payload
     error(prism.invalid, "release graph object missing")
 
-func require_hex(pack: git.Pack*, text: str, kind: str, budget: usize*) -> !:
+func payload_hex(pack: git.Pack*, text: str, kind: str, budget: usize*) -> const u8[]!:
     var id: u8[20]
     try git.decode_id(text, id)
-    try require(pack, id, kind, budget)
+    return try payload(pack, id, kind, budget)
 
-pub func validate(source: const u8[], commit: str) -> !:
+func require(pack: git.Pack*, id: const u8[], kind: str, budget: usize*) -> !:
+    discard(try payload(pack, id, kind, budget))
+
+func require_hex(pack: git.Pack*, text: str, kind: str, budget: usize*) -> !:
+    discard(try payload_hex(pack, text, kind, budget))
+
+## LRS2 makes the root manifest part of the publication trust boundary. The
+## exact source bytes selected by the signed commit must agree with every
+## signed package identity, compiler and dependency field.
+func validate_manifest(pack: git.Pack*, release: pkg.Release, budget: usize*) -> !:
+    if release.schema_version != 2: return
+    let commit_payload = try payload_hex(pack, release.commit, "commit", budget)
+    let commit = try git.decode_commit(commit_payload)
+    let tree_payload = try payload_hex(pack, commit.tree, "tree", budget)
+    var at: usize = 0
+    while at < tree_payload.length:
+        let entry = try git.decode_tree_entry(tree_payload[at..])
+        if entry.name == "luce.toml":
+            if entry.mode != "100644": error(prism.invalid, "release manifest must be a regular file")
+            let manifest = try payload(pack, entry.id, "blob", budget)
+            try pkg.validate_release_manifest(release, (str)manifest)
+            return
+        at += entry.consumed
+    error(prism.invalid, "LRS2 release requires root luce.toml")
+
+pub func validate(source: const u8[], release: pkg.Release) -> !:
     var pack = try git.decode_pack(source)
     defer pack.close()
     var budget: usize = 16777216
     if pack.items.length > 4096: error(prism.invalid, "release graph object limit exceeded")
-    try require_hex(&pack, commit, "commit", &budget)
+    try require_hex(&pack, release.commit, "commit", &budget)
     for i in 0..<pack.items.length:
         let item = &pack.items[i]
         for j in 0..<i:
@@ -44,3 +70,4 @@ pub func validate(source: const u8[], commit: str) -> !:
         elif item.kind == "tag":
             let value = try git.decode_tag(item.payload)
             try require_hex(&pack, value.object, value.kind, &budget)
+    try validate_manifest(&pack, release, &budget)

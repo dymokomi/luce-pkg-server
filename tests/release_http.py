@@ -24,8 +24,9 @@ def check(port, headers, other_headers, root, fixture, commit):
                                      input=commit + b'\n', timeout=30)
     pack = root / 'release-source.pack'
     pack.write_bytes(source)
-    def signed(version='1.2.3', origin=ORIGIN, package='testuser/git-wire', target=commit):
-        subprocess.run([str(fixture), 'release', origin, package, version, target.decode(), str(pack), str(root)],
+    def signed(version='1.2.3', origin=ORIGIN, package='testuser/git-wire', target=commit, schema=1):
+        command = 'release-v2-bad' if schema == 'bad' else ('release-v2' if schema == 2 else 'release')
+        subprocess.run([str(fixture), command, origin, package, version, target.decode(), str(pack), str(root)],
                        check=True, timeout=30)
         metadata = (root / 'release-metadata').read_bytes()
         signature = (root / 'release-signature').read_bytes()
@@ -88,8 +89,16 @@ def check(port, headers, other_headers, root, fixture, commit):
     assert transfer(port, 'POST', ROOT, large_wire, binary) == (201, b'published')
     assert catalog(transfer(port, 'GET', ROOT, headers=headers)[1]) == ['1.2.5', '1.2.4', '1.2.3']
     persisted(port, headers, large_expected, '1.2.5')
+    mismatched, _ = signed(version='1.2.6', schema='bad')
+    assert transfer(port, 'POST', ROOT, mismatched, binary) == (400, b'invalid signed release')
+    assert transfer(port, 'GET', ROOT + '/1.2.6/source', headers=headers)[0] == 404
+    v2_wire, v2_expected = signed(version='1.2.6', schema=2)
+    assert v2_expected['metadata'][:6] == b'LRS2\2\0'
+    assert transfer(port, 'POST', ROOT, v2_wire, binary) == (201, b'published')
+    assert catalog(transfer(port, 'GET', ROOT, headers=headers)[1]) == ['1.2.6', '1.2.5', '1.2.4', '1.2.3']
+    persisted(port, headers, v2_expected, '1.2.6')
     print('PASS signed release HTTP: native proof, framing, ownership, retries, races and spooled/chunked source', flush=True)
-    return expected, large_expected
+    return expected, large_expected, v2_expected
 
 
 def persisted(port, headers, expected, version='1.2.3'):

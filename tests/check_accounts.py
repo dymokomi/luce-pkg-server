@@ -103,7 +103,7 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             assert request(port, 'POST', endpoint, {'name': 'demo'}, admin_headers)[0] == 201
             object_path, object_bytes = object_http.check(port, headers, admin_headers)
             git_commit = git_http.check(port, headers, root, request)
-            release_expected, large_release_expected = release_http.check(port, headers, admin_headers, root, fixture, git_commit)
+            release_expected, large_release_expected, v2_release_expected = release_http.check(port, headers, admin_headers, root, fixture, git_commit)
             subprocess.run([str(client), str(port)], check=True, timeout=120)
             def identity(_):
                 return request(port, 'GET', '/v1/identity', headers=headers)
@@ -156,7 +156,8 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             key_http.persisted(port, restored_headers, enrolled_key)
             release_http.persisted(port, restored_headers, release_expected)
             release_http.persisted(port, restored_headers, large_release_expected, '1.2.5')
-            assert release_http.catalog(request(port, 'GET', '/v1/releases/testuser/git-wire', headers=restored_headers)[1]) == ['1.2.5', '1.2.4', '1.2.3']
+            release_http.persisted(port, restored_headers, v2_release_expected, '1.2.6')
+            assert release_http.catalog(request(port, 'GET', '/v1/releases/testuser/git-wire', headers=restored_headers)[1]) == ['1.2.6', '1.2.5', '1.2.4', '1.2.3']
             status, advertisement = request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack', headers=restored_headers)
             assert status == 200 and git_commit + b' refs/heads/main' in advertisement
             subprocess.run([str(client), str(port)], check=True, timeout=120)

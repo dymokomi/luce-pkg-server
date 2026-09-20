@@ -14,7 +14,7 @@ import memory
 import account_identity as keys
 import pkg
 
-let max_release_upload: usize = repositories.max_object_bytes + 1600 + 3309 + 8
+let max_release_upload: usize = repositories.max_object_bytes + 24576 + 3309 + 8
 
 func failed(code: ErrorCode, message: str) -> interop.Outcome[interop.Reference[http.Response]]:
     let copied = interop.copy_text(message) catch failure:
@@ -238,7 +238,7 @@ struct App:
             used += chunk.length
         if (str)wire[..<4] != "LRP1" or wire[6] != 0 or wire[7] != 0: return reply("invalid upload schema", 400)
         let metadata_size = (usize)wire[4] | ((usize)wire[5] << 8)
-        if metadata_size < 50 or metadata_size > 1600 or metadata_size + 8 + 3309 > wire.length:
+        if metadata_size < 50 or metadata_size > 24576 or metadata_size + 8 + 3309 > wire.length:
             return reply("invalid upload framing", 400)
         let metadata = wire[8..<8 + metadata_size]
         let signature = wire[8 + metadata_size..<8 + metadata_size + 3309]

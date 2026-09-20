@@ -67,9 +67,10 @@ Current implementation constraints:
 Still to design/review, so M0 is not complete:
 
 - Versioned identity/proof/signature/key-role, vault/recovery and challenge/token
-  encodings beyond the LID1 invite/vault wrap; exact ML-DSA-65 release/root
-  signature profile (`LRS1`) and freshness/rotation policy. Algorithm families
-  and LID1 header layouts are chosen; remaining record kinds are not all implemented.
+  encodings beyond the LID1 invite/vault wrap; registry-root signature and
+  freshness/rotation policy. ML-DSA-65 LRS1/LRS2 release signatures and LRS2
+  source-manifest agreement are implemented; remaining record kinds and root
+  trust metadata are not all implemented.
 - Shared normalized lock contents on top of frozen `luc.lock` TOML. First-slice
   `luce-pkg` encodes origin/name/version/digest/compiler; hostile-input and
   archive/cache work remain.

@@ -86,14 +86,20 @@ storage keys avoid Prism path restrictions and name aliases.
 The internal `publish_release`/`get_release` storage APIs support immutable
 signed releases. HTTP publication/download is available; `luc publish` is not wired yet.
 The transport must supply an authenticated principal and configured origin.
-Publication requires exact LRS1 `owner/package` and origin binding, numeric
-toolchain version, the account's enrolled ML-DSA-65 key, a valid signature and
-SHA-256 digest of the exact source pack. The signed commit must already exist as
-a commit object in this repository. The standalone pack must contain that commit
-and all typed graph dependencies (Gitlinks remain external); duplicates, missing
-objects and invalid structures are rejected. Limits are64MiB source,4096 pack
-objects and16M graph lookup probes. Extra structurally valid pack objects are
-allowed; this does not perform the CLI's checkout-path portability checks.
+Publication requires exact LRS1 or LRS2 `owner/package` and origin binding,
+numeric toolchain version, the account's enrolled ML-DSA-65 key, a valid
+signature and SHA-256 digest of the exact source pack. LRS2 additionally signs
+the compiler package identity and a canonical, sorted dependency set. Its signed
+commit must contain a regular root `luce.toml`; `[package]` name/language and the
+complete `[registry.dependencies]` table must agree with the signed fields.
+Legacy LRS1 remains accepted but does not claim source/dependency agreement.
+The signed commit must already exist as a commit object in this repository. The
+standalone pack must contain that commit and all typed graph dependencies
+(Gitlinks remain external); duplicates, missing objects and invalid structures
+are rejected. Limits are64MiB source,4096 pack objects and16M graph lookup
+probes. Extra structurally valid pack objects are allowed; this does not perform
+the CLI's checkout-path portability checks or require dependencies to have
+already been published.
 
 The version record atomically stores metadata, signature, historical publisher
 key and source storage descriptor. Packs over1MiB use existing immutable chunk
@@ -118,9 +124,9 @@ an enrolled signing key, configured `LUCE_REGISTRY_ORIGIN`, and Content-Type
 | Offset | Bytes | Content |
 | --- | ---: | --- |
 | 0 | 4 | ASCII `LRP1` |
-| 4 | 2 | Little-endian metadata length M,50..1600 |
+| 4 | 2 | Little-endian metadata length M,50..24576 |
 | 6 | 2 | Reserved, both zero |
-| 8 | M | Canonical LRS1 metadata |
+| 8 | M | Canonical LRS1 or LRS2 metadata |
 | 8+M | 3309 | ML-DSA-65 signature over metadata |
 | 3317+M | remainder | Standalone source pack, at most64MiB |
 

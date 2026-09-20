@@ -57,9 +57,14 @@ production-calibrated.
 
 ## Release signatures
 
-- Publisher and registry-root signatures: **ML-DSA-65** over a canonical
-  `"LRS1"` metadata encoding (schema, origin, package, version, commit, SHA-256
-  source digest, toolchain).
+- Publisher signatures: **ML-DSA-65** over canonical `LRS1` legacy metadata or
+  dependency-aware `LRS2` metadata. LRS2 binds origin, package coordinate,
+  version, commit, SHA-256 source digest, compiler/toolchain, compiler package
+  identity and the sorted dependency requirements. Publication also verifies
+  those LRS2 identity/dependency fields against the signed commit's root
+  `luce.toml`.
+- Registry-root signature encoding and freshness/rotation policy remain a
+  separate design and review gate.
 - Freshness: root metadata expires; clients reject rollback to older timestamps
   for the same role. Exact TUF compatibility is not claimed.
 - No algorithm downgrade.

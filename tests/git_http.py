@@ -37,10 +37,19 @@ def check(port, headers, root, request, create_repository=None):
     git('init', '--object-format=sha1', '-b', 'main', '-q')
     git('clone', endpoint, str(root / 'git-empty-clone'))
     (repo / 'main.lucb').write_text('pub func main() -> i32:\n    return 0\n')
+    (repo / 'luce.toml').write_text('''[package]
+name = "git_wire"
+version = "1.2.6"
+language = "luce-base"
+
+[registry.dependencies]
+"testadmin/core" = "^1.0.0"
+"testadmin/render-kit" = "2.1.0"
+''')
     # Large near-identical revisions force stock Git to use a remote delta base.
     source = b''.join(hashlib.sha256(str(i).encode()).hexdigest().encode() + b'\n' for i in range(4096))
     (repo / 'large.txt').write_bytes(source)
-    git('add', 'main.lucb', 'large.txt')
+    git('add', 'main.lucb', 'luce.toml', 'large.txt')
     git('commit', '-qm', 'initial native registry fixture')
     git('remote', 'add', 'origin', endpoint)
     git('push', '--porcelain', 'origin', 'main')

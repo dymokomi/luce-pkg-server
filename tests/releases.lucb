@@ -10,7 +10,7 @@ import memory
 
 let origin = "https://pkg.example.test"
 let commit_payload = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor A\ncommitter A\n\nrelease\n"
-var metadata: u8[1600]
+var metadata: u8[24576]
 var metadata_size: usize
 var signature: u8[3309]
 var source: u8[4096]
@@ -134,7 +134,7 @@ func large(database: db.Database*) -> !:
     var value = record()
     value.version = "1.2.4"
     value.source_digest = digest
-    var meta: u8[1600]
+    var meta: u8[24576]
     let size = try pkg.encode_release(value, meta)
     var proof: u8[3309]
     var random: u8[32]
@@ -198,9 +198,15 @@ func cases(database: db.Database*, race: bool) -> !:
         bad.commit = "0000000000000000000000000000000000000001"
         try sign(bad)
         try reject(database)
+        # Sign a hostile raw encoding that the public encoder correctly refuses
+        # to create: replace the first byte of the final toolchain field while
+        # retaining its length and then sign those exact bytes.
         bad = record()
-        bad.toolchain = "not-a-version"
         try sign(bad)
+        let toolchain_at = metadata_size - source_digest.length - bad.toolchain.length
+        metadata[toolchain_at] = 'x'
+        var hostile_random: u8[32]
+        try crypto.mldsa_sign(private_key, metadata[..<metadata_size], hostile_random, signature)
         try reject(database)
         # Valid signed digest but missing referenced tree must not publish.
         var incomplete: git.Object[1]

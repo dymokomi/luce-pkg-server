@@ -389,7 +389,7 @@ pub func publish_release(database: db.Database*, principal: str, owner: str, nam
         error(prism.invalid, "invalid enrolled signing key")
     if not try pkg.verify_release(release, key.value().bytes(), signature, source):
         error(prism.invalid, "invalid release signature or digest")
-    try release_pack.validate(source, release.commit)
+    try release_pack.validate(source, release)
     var id: u8[20]
     try git.decode_id(release.commit, id)
     let commit = try checked_object(snapshot.value(), path, id)

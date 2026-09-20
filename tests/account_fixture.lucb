@@ -22,8 +22,16 @@ func release_fixture(arguments: str[]) -> i32!:
     discard(try pkg.source_digest(source, digest))
     let release = pkg.Release(origin = arguments[2], package = arguments[3], version = arguments[4],
         commit = arguments[5], source_digest = digest, compiler = "luce-base", toolchain = "0.20.0")
-    var metadata: u8[1600]
-    let size = try pkg.encode_release(release, metadata)
+    var metadata: u8[24576]
+    var size: usize
+    if arguments[1] == "release-v2" or arguments[1] == "release-v2-bad":
+        var dependencies: pkg.Dependency[2]
+        dependencies[0] = pkg.Dependency(package = "testadmin/core", requirement = "^1.0.0")
+        dependencies[1] = pkg.Dependency(package = "testadmin/render-kit", requirement = "2.1.0")
+        let package_name = "wrong_name" if arguments[1] == "release-v2-bad" else "git_wire"
+        size = try pkg.encode_release_v2(release, package_name, dependencies, dependencies.length, metadata)
+    else:
+        size = try pkg.encode_release(release, metadata)
     var seed: u8[32]
     var key: u8[1952]
     var secret: u8[4032]
@@ -62,7 +70,8 @@ func proof(arguments: str[]) -> i32!:
 
 pub func main(arguments: str[]) -> i32!:
     if arguments.length > 1 and arguments[1] == "proof": return try proof(arguments)
-    if arguments.length > 1 and arguments[1] == "release": return try release_fixture(arguments)
+    if arguments.length > 1 and (arguments[1] == "release" or arguments[1] == "release-v2" or arguments[1] == "release-v2-bad"):
+        return try release_fixture(arguments)
     assert(arguments.length == 2)
     let authority = try auth.Authority.open(arguments[1], "integration-store-token")
     defer authority.release()
