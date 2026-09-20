@@ -7,6 +7,7 @@ registry = "luce_pkg_server.registry"
 admin = "luce_pkg_server.admin"
 repositories = "luce_pkg_server.repositories"
 http_credentials = "luce_pkg_server.http_auth"
+rate_limit = "luce_pkg_server.rate_limit"
 
 [dependencies]
 luce_server = "../luce-server"

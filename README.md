@@ -32,8 +32,8 @@ Object/Git requests and responses are bounded to64MiB. The global request ceilin
 is64MiB +4917 bytes to accommodate signed-release envelopes; individual handlers
 retain their own limits. Incoming bodies spool above64KiB but
 handlers still assemble whole objects in memory. The transport receives bodies
-before handler authentication; per-account quotas, early admission/rate limits
-and disk-exhaustion policy remain required before public deployment. Account JSON
+before handler authentication; authenticated-transfer quotas and disk-exhaustion
+policy remain required before public deployment. Account JSON
 handlers retain their own 4 KiB decode limits.
 The store token is required in `LUCE_REGISTRY_STORE_TOKEN`; it is not an HTTP
 administrator credential. There is no public bootstrap or invite-creation route.
@@ -42,14 +42,19 @@ records with native Argon2id at 64 MiB / 3 passes / 4 lanes, including integrati
 fixtures. Legacy unversioned accounts and test-profile sessions fail closed; there
 is no automatic migration. Password hashing shares a process-wide four-slot
 nonblocking admission gate; login overload returns 503 (registration already maps
-service failures to 503). Sessions have a persisted absolute 24-hour lifetime;
+service failures to 503). Valid-shaped login and invitation-redemption requests
+also pass through separate allocation-free process-wide gates, each admitting 16
+requests per fixed 60-second window before account lookup or password KDF. Excess
+requests return 429 with `Retry-After: 60`; malformed requests do not consume a
+slot. The gates are deliberately coarse and reset on process restart. Sessions
+have a persisted absolute 24-hour lifetime;
 expired sessions and legacy sessions without timestamps are unauthorized. The
 auth library independently validates token syntax before any storage operation.
 Only SHA-256-derived session identifiers are stored; raw bearer values never
 appear in Prism paths or fields, and old raw-token-keyed records fail closed.
-Per-account rate limits, expired-record cleanup, credential listing/labels and
-account-wide emergency revocation remain pending. Native ML-DSA-65 release
-signatures are implemented below.
+Per-account, source-address and distributed rate limits, expired-record cleanup,
+credential listing/labels and account-wide emergency revocation remain pending.
+Native ML-DSA-65 release signatures are implemented below.
 
 Account signing-key enrollment uses native ML-DSA-65. Set `LUCE_REGISTRY_ORIGIN`
 to the exact canonical origin clients sign (for example `https://pkg.luciaos.com`);

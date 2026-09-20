@@ -15,6 +15,8 @@ import account_identity as keys
 import pkg
 import http_credentials as transport_auth
 import crypto_native as crypto
+import time
+import rate_limit
 
 let max_release_upload: usize = repositories.max_object_bytes + 24576 + 3309 + 8
 
@@ -41,6 +43,17 @@ func basic_challenge() -> interop.Outcome[interop.Reference[http.Response]]:
         value.release()
         return failed(failure.code, "internal error")
     value.value().header("WWW-Authenticate", "Basic realm=\"pkg.luciaos.com\", charset=\"UTF-8\"") catch failure:
+        value.release()
+        return failed(failure.code, "internal error")
+    return interop.Outcome[interop.Reference[http.Response]].success(interop.Owned[interop.Reference[http.Response]](value, &value.owner.header))
+
+func rate_limited() -> interop.Outcome[interop.Reference[http.Response]]:
+    let value = http.Response.bytes(b"rate limited", "text/plain; charset=utf-8", 429) catch failure:
+        return failed(failure.code, "internal error")
+    value.value().header("Cache-Control", "no-store") catch failure:
+        value.release()
+        return failed(failure.code, "internal error")
+    value.value().header("Retry-After", "60") catch failure:
         value.release()
         return failed(failure.code, "internal error")
     return interop.Outcome[interop.Reference[http.Response]].success(interop.Owned[interop.Reference[http.Response]](value, &value.owner.header))
@@ -151,6 +164,7 @@ struct App:
         let name = field(root, "name") catch: return reply("invalid fields", 400)
         let password = field(root, "password") catch: return reply("invalid fields", 400)
         if not valid_token(code): return reply("invalid invitation", 400)
+        if not rate_limit.admit_registration(time.unix()): return rate_limited()
         self.authority.value().accept(code, name, password) catch failure:
             if failure.code == auth.conflict: return reply("registration conflict", 409)
             if failure.code == auth.invalid: return reply("invalid registration", 400)
@@ -167,6 +181,7 @@ struct App:
         if root.kind() != json.Kind.object or root.length() != 2: return reply("invalid fields", 400)
         let name = field(root, "name") catch: return reply("invalid fields", 400)
         let password = field(root, "password") catch: return reply("invalid fields", 400)
+        if not rate_limit.admit_login(time.unix()): return rate_limited()
         let token = self.authority.value().login(name, password) catch failure:
             if failure.code == auth.busy: return reply("authentication busy", 503)
             return reply("unauthorized", 401)

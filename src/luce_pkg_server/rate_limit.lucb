@@ -1,0 +1,39 @@
+## Allocation-free process-wide admission gates for unauthenticated account work.
+## These protect finite application/KDF capacity; per-account and proxy-address
+## policy can be layered separately without trusting identity forwarding headers.
+import sync
+
+pub let window_seconds: i64 = 60
+pub let capacity: u32 = 16
+
+pub struct Gate:
+    var mutex: sync.Mutex
+    var started: i64
+    var used: u32
+
+    ## Explicit time keeps the state machine deterministic in tests. A missing or
+    ## backward wall clock fails closed until the previous window catches up.
+    pub mutating func admit(now: i64) -> bool:
+        self.mutex.lock()
+        defer self.mutex.unlock()
+        if now <= 0: return false
+        if self.started == 0:
+            self.started = now
+            self.used = 0
+        elif now < self.started:
+            return false
+        elif now - self.started >= window_seconds:
+            self.started = now
+            self.used = 0
+        if self.used >= capacity: return false
+        self.used += 1
+        return true
+
+var login: Gate
+var registration: Gate
+
+pub func admit_login(now: i64) -> bool:
+    return login.admit(now)
+
+pub func admit_registration(now: i64) -> bool:
+    return registration.admit(now)

@@ -25,6 +25,7 @@ def run(command):
 for source, name in [('src/luce_pkg_server/registry.lucb', 'registry'),
                      ('src/luce_pkg_server/admin.lucb', 'admin'),
                      ('tests/http_auth.lucb', 'http-auth'),
+                     ('tests/rate_limit.lucb', 'rate-limit'),
                      ('tests/account_fixture.lucb', 'account-fixture'),
                      ('tests/client/native_transfer.lucb', 'native-transfer')]:
     generated = output / f'{name}.c'
@@ -33,6 +34,7 @@ for source, name in [('src/luce_pkg_server/registry.lucb', 'registry'),
          '-fno-strict-aliasing', '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
          '-I', runtime, generated, runtime / 'lucb_rt.c', '-pthread', '-lm', '-o', output / name])
 run([output / 'http-auth'])
+run([output / 'rate-limit'])
 run([sys.executable, ROOT / 'tests/check_accounts.py', output / 'registry', output / 'account-fixture', output / 'native-transfer'])
 run([sys.executable, ROOT / 'tests/admin.py', output / 'admin', output / 'registry'])
 run([sys.executable, ROOT / 'tests/deployment.py', output / 'admin'])

@@ -19,14 +19,17 @@ import release_http
 binary, fixture, client = [Path(arg).resolve() for arg in sys.argv[1:4]]
 registration_client = Path(sys.argv[4]).resolve() if len(sys.argv) == 5 else None
 
-def request(port, method, path, value=None, headers=None):
+def request(port, method, path, value=None, headers=None, include_headers=False):
     payload = json.dumps(value).encode() if value is not None else b''
     timeout = float(os.environ.get('LUCE_TEST_HTTP_TIMEOUT', '10'))
     connection = http.client.HTTPConnection('127.0.0.1', port, timeout=timeout)
     try:
         connection.request(method, path, payload, headers or {})
         response = connection.getresponse()
-        return response.status, response.read()
+        body = response.read()
+        if include_headers:
+            return response.status, body, dict(response.getheaders())
+        return response.status, body
     finally:
         connection.close()
 
@@ -88,6 +91,21 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             with concurrent.futures.ThreadPoolExecutor(max_workers=2) as pool:
                 statuses = list(pool.map(register, ['racerone', 'racertwo']))
             assert statuses.count(201) == 1 and all(status in (201, 400, 409) for status in statuses), statuses
+            registration_attempts = [
+                request(port, 'POST', '/v1/invites/redeem',
+                        {'code': f'{index + 1000:032x}', 'name': f'unknown{index}', 'password': 'wrong'})
+                for index in range(32)
+            ]
+            assert all(status in (400, 429) for status, _ in registration_attempts), registration_attempts
+            assert any(value == (429, b'rate limited') for value in registration_attempts), registration_attempts
+            status, body, response_headers = request(
+                port, 'POST', '/v1/invites/redeem',
+                {'code': code, 'name': 'limited', 'password': 'wrong'},
+                include_headers=True)
+            assert (status, body) == (429, b'rate limited')
+            assert response_headers.get('Retry-After') == '60', response_headers
+            assert response_headers.get('Cache-Control') == 'no-store', response_headers
+            # Registration and login use independent process-wide gates.
             assert request(port, 'POST', '/v1/sessions', {'name': 'testuser', 'password': 'wrong'})[0] == 401
             status, token = request(port, 'POST', '/v1/sessions', {'name': 'testuser', 'password': 'fixture-pass'})
             assert status == 200 and len(token) == 32, (status, token)
@@ -157,6 +175,20 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             assert object_http.transfer(port, 'GET', object_path, headers=headers)[0] == 401
             assert object_http.transfer(port, 'PUT', object_path, b'', headers)[0] == 401
             assert request(port, 'POST', '/v1/sessions', {'name': 'testadmin', 'password': 'fixture-password'})[0] == 200
+            # Valid-shaped unauthenticated requests consume a process-wide fixed
+            # window before any password KDF. Malformed bodies do not consume it.
+            attempts = [request(port, 'POST', '/v1/sessions',
+                                {'name': f'unknown{index}', 'password': 'wrong'})
+                        for index in range(32)]
+            assert all(status in (401, 429) for status, _ in attempts), attempts
+            assert any(value == (429, b'rate limited') for value in attempts), attempts
+            status, body, response_headers = request(
+                port, 'POST', '/v1/sessions',
+                {'name': 'testadmin', 'password': 'fixture-password'},
+                include_headers=True)
+            assert (status, body) == (429, b'rate limited')
+            assert response_headers.get('Retry-After') == '60', response_headers
+            assert response_headers.get('Cache-Control') == 'no-store', response_headers
         finally:
             if sys.exc_info()[0] is not None or process.poll() is not None:
                 log.flush()

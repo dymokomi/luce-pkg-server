@@ -1,0 +1,38 @@
+import rate_limit
+import thread
+
+struct Shared:
+    var gate: rate_limit.Gate
+    var ready: @u32
+    var start: @u32
+    var accepted: @u32
+
+func contender(raw: void*?):
+    let shared = (Shared*)(raw else trap("missing limiter state"))
+    discard(shared.ready.add(1, .release))
+    while shared.start.load(.acquire) == 0: thread.sleep(1)
+    if shared.gate.admit(1000): discard(shared.accepted.add(1, .relaxed))
+
+pub func main(arguments: str[]) -> i32!:
+    assert(arguments.length == 1)
+    var gate = rate_limit.Gate()
+    assert(not gate.admit(0))
+    for i in 0..<rate_limit.capacity:
+        discard(i)
+        assert(gate.admit(100))
+    assert(not gate.admit(100))
+    assert(not gate.admit(159))
+    assert(not gate.admit(99))
+    assert(gate.admit(160))
+
+    var shared = Shared()
+    var workers: thread.Handle[64]
+    for i in 0..<workers.length: workers[i] = try thread.spawn(contender, (void*)&shared)
+    while shared.ready.load(.acquire) != (u32)workers.length: thread.sleep(1)
+    shared.start.store(1, .release)
+    for i in 0..<workers.length: try workers[i].join()
+    assert(shared.accepted.load(.acquire) == rate_limit.capacity)
+    assert(not shared.gate.admit(1000))
+    assert(shared.gate.admit(1060))
+    print("PASS bounded concurrent account admission and clock handling")
+    return 0
