@@ -22,6 +22,14 @@ for required in ('pkg.luciaos.com', 'max_size 65MiB', 'Cache-Control "no-store"'
 assert 'encode ' not in caddy and 'basic_auth' not in caddy
 for script in ('backup.sh', 'restore.sh'):
     subprocess.run(['bash', '-n', ROOT / 'deploy' / script], check=True)
+subprocess.run(['bash', '-n', ROOT / 'deploy' / 'build-release.sh'], check=True)
+
+builder = (ROOT / 'deploy' / 'build-release.sh').read_text()
+for required in ('--native --release', 'SOURCE_COMMIT', 'DEPENDENCY_PINS',
+                 'SHA256SUMS', 'git -C "$root" diff --quiet',
+                 'release destination already exists'):
+    assert required in builder
+assert 'x86_64' in builder and 'Linux' in builder
 
 with tempfile.TemporaryDirectory(prefix='luce-pkg-deploy-', dir='/tmp') as temporary:
     root = Path(temporary)

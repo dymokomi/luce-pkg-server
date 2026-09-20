@@ -12,7 +12,9 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-15]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    # The exhaustive generated-C/sanitizer matrix can exceed 45 minutes on a
+    # cold two-core hosted runner without being stalled.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
         with:
@@ -82,6 +84,21 @@ jobs:
         if: always()
         working-directory: luce-pkg-server
         run: python3 tests/test_heap_process.py
+      - name: Build immutable Linux deployment bundle
+        if: runner.os == 'Linux'
+        working-directory: luce-pkg-server
+        shell: bash
+        run: |
+          ./deploy/build-release.sh \
+            "$PWD/build/toolchain/luce-base" \
+            "$GITHUB_SHA" \
+            "$PWD/build/luce-pkg-server-$GITHUB_SHA-linux-x86_64"
+      - uses: actions/upload-artifact@v4
+        if: runner.os == 'Linux'
+        with:
+          name: luce-pkg-server-${{ github.sha }}-linux-x86_64
+          path: luce-pkg-server/build/luce-pkg-server-${{ github.sha }}-linux-x86_64
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         if: always()
         with:
