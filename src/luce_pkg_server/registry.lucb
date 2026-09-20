@@ -92,7 +92,9 @@ struct App:
         if root.kind() != json.Kind.object or root.length() != 2: return reply("invalid fields", 400)
         let name = field(root, "name") catch: return reply("invalid fields", 400)
         let password = field(root, "password") catch: return reply("invalid fields", 400)
-        let token = self.authority.value().login(name, password) catch: return reply("unauthorized", 401)
+        let token = self.authority.value().login(name, password) catch failure:
+            if failure.code == auth.busy: return reply("authentication busy", 503)
+            return reply("unauthorized", 401)
         defer token.release()
         let text = token.value().text_at() catch: return reply("internal error", 500)
         return reply(text)

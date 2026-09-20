@@ -33,8 +33,10 @@ administrator credential. There is no public bootstrap or invite-creation route.
 The disposable account fixture is for tests only. Accounts use versioned password
 records with native Argon2id at 64 MiB / 3 passes / 4 lanes, including integration
 fixtures. Legacy unversioned accounts and test-profile sessions fail closed; there
-is no automatic migration. Bounded KDF admission, rate limits, expiry, account
-signatures and production credential policy are pending.
+is no automatic migration. Password hashing shares a process-wide four-slot
+nonblocking admission gate; login overload returns 503 (registration already maps
+service failures to 503). Per-account rate limits, expiry, account signatures and
+production credential policy are pending.
 It binds `127.0.0.1` only. This is not `pkg.luciaos.com`, complete Git hosting, signed
 releases or real credentials. A green roadmap check is not an authentication,
 storage, cryptography or deployment gate.
