@@ -81,6 +81,37 @@ must already have an account. Package names are lowercase ASCII letters/digits,
 underscores or hyphens (1–64 bytes, first character alphanumeric); lossless hex
 storage keys avoid Prism path restrictions and name aliases.
 
+The internal `publish_release`/`get_release` storage APIs now support immutable
+signed releases; HTTP publication/download and `luc publish` are not wired yet.
+The transport must supply an authenticated principal and configured origin.
+Publication requires exact LRS1 `owner/package` and origin binding, numeric
+toolchain version, the account's enrolled ML-DSA-65 key, a valid signature and
+SHA-256 digest of the exact source pack. The signed commit must already exist as
+a commit object in this repository. The standalone pack must contain that commit
+and all typed graph dependencies (Gitlinks remain external); duplicates, missing
+objects and invalid structures are rejected. Limits are64MiB source,4096 pack
+objects and16M graph lookup probes. Extra structurally valid pack objects are
+allowed; this does not perform the CLI's checkout-path portability checks.
+
+The version record atomically stores metadata, signature, historical publisher
+key and source storage descriptor. Packs over1MiB use existing immutable chunk
+storage. Exact metadata/signature/source retries are idempotent and complete a
+durability barrier; any changed bytes at an existing version conflict, including
+a newly randomized signature. Publication conflicts may require retry. Staged
+chunks can remain orphaned on a later conflict/failure; quota/GC remains pending.
+Commit followed by durability failure may already have published the record.
+Concurrent key changes conflict with publication via a same-key-field write.
+The caller's session authentication is outside this core; no session token is
+accepted here. Version deletion/replacement and public-reader authorization are
+not exposed. Reads currently require the repository owner and verify stored
+identity, signature and source digest before returning any component as an owning
+Value. This historical key is not independently trusted publisher-key distribution.
+
+`tests/run_repositories.py --fixture releases` covers six modes, local/IPC/reopen,
+failed-validation no-write, exact retries, immutable version conflicts, duplicate
+and incomplete packs, concurrent publishers, chunked artifacts and signature
+corruption. `--mode sanitize` and macOS `--mode native0 --heap` are CI gates.
+
 Objects are canonical uncompressed Git envelopes, limited to 64 MiB each. Exact
 duplicates are idempotent, differing bytes at the same ID conflict, and reads
 recheck framing and Git identity. Successful writes include the database bake

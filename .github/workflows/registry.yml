@@ -21,7 +21,7 @@ jobs:
         working-directory: luce-pkg-server
         shell: bash
         run: |
-          for entry in BASE:luce-base LUCE:luce SERVER:luce-server DB:luce-db AUTH:luce-auth CRYPTO:luce-crypto PRISM:luce-prism TLS:luce-tls JSON:luce-json GIT:luce-git COMPRESS:luce-compress HTTP_CLIENT:luce-http-client; do
+          for entry in BASE:luce-base LUCE:luce SERVER:luce-server DB:luce-db AUTH:luce-auth CRYPTO:luce-crypto PRISM:luce-prism TLS:luce-tls JSON:luce-json GIT:luce-git COMPRESS:luce-compress HTTP_CLIENT:luce-http-client PKG:luce-pkg; do
             pin="${entry%%:*}"
             repo="${entry#*:}"
             revision=$(cat "bootstrap/$pin")
@@ -62,6 +62,8 @@ jobs:
           python3 tests/run_repositories.py --fixture graph --mode sanitize 2>&1 | tee build/graph-sanitize-ci.log
           python3 tests/run_repositories.py --fixture receive 2>&1 | tee build/receive-ci.log
           python3 tests/run_repositories.py --fixture receive --mode sanitize 2>&1 | tee build/receive-sanitize-ci.log
+          python3 tests/run_repositories.py --fixture releases 2>&1 | tee build/releases-ci.log
+          python3 tests/run_repositories.py --fixture releases --mode sanitize 2>&1 | tee build/releases-sanitize-ci.log
           python3 tests/run_repositories.py --fixture large_objects 2>&1 | tee build/large-objects-ci.log
           python3 tests/run_repositories.py --fixture large_objects --mode sanitize 2>&1 | tee build/large-objects-sanitize-ci.log
       - name: Repository native heap cleanup
@@ -74,6 +76,7 @@ jobs:
           python3 tests/run_repositories.py --fixture refs --mode native0 --heap 2>&1 | tee build/refs-heap-ci.log
           python3 tests/run_repositories.py --fixture graph --mode native0 --heap 2>&1 | tee build/graph-heap-ci.log
           python3 tests/run_repositories.py --fixture receive --mode native0 --heap 2>&1 | tee build/receive-heap-ci.log
+          python3 tests/run_repositories.py --fixture releases --mode native0 --heap 2>&1 | tee build/releases-heap-ci.log
           python3 tests/run_repositories.py --fixture large_objects --mode native0 --heap 2>&1 | tee build/large-objects-heap-ci.log
       - name: Heap-tool process lifecycle regression
         if: always()
@@ -94,6 +97,7 @@ jobs:
             luce-pkg-server/build/refs-heap-ci.log
             luce-pkg-server/build/graph*.log
             luce-pkg-server/build/receive*.log
+            luce-pkg-server/build/releases*.log
             luce-pkg-server/build/large-objects-ci.log
             luce-pkg-server/build/large-objects-sanitize-ci.log
             luce-pkg-server/build/large-objects-heap-ci.log

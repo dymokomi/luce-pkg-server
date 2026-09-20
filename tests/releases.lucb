@@ -1,0 +1,255 @@
+import repositories
+import auth
+import db
+import prism
+import pkg
+import git
+import crypto_native as crypto
+import thread
+import memory
+
+let origin = "https://pkg.example.test"
+let commit_payload = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor A\ncommitter A\n\nrelease\n"
+var metadata: u8[1600]
+var metadata_size: usize
+var signature: u8[3309]
+var source: u8[4096]
+var source_size: usize
+var public_key: u8[1952]
+var private_key: u8[4032]
+var commit_text: u8[40]
+var source_digest: u8[32]
+var worker_socket: str
+var worker_socket_buffer: u8[512]
+var ready: @u32
+var start: @u32
+var created: @u32
+var repeated: @u32
+
+func sign(value: pkg.Release) -> !:
+    metadata_size = try pkg.encode_release(value, metadata)
+    var random: u8[32]
+    try crypto.mldsa_sign(private_key, metadata[..<metadata_size], random, signature)
+
+func record() -> pkg.Release:
+    return pkg.Release(origin = origin, package = "alice/demo", version = "1.2.3", commit = (str)commit_text,
+        source_digest = source_digest, compiler = "luce-base", toolchain = "0.20.0")
+
+func prepare() -> !:
+    var seed: u8[32]
+    try crypto.mldsa_keygen(seed, public_key, private_key)
+    var objects: git.Object[2]
+    objects[0] = git.Object(kind = "tree", payload = b"")
+    objects[1] = git.Object(kind = "commit", payload = commit_payload)
+    source_size = try git.encode_pack(objects, source)
+    var id: u8[20]
+    discard(try git.hash_object("commit", commit_payload, id))
+    discard(try git.hex_id(id, commit_text))
+    discard(try pkg.source_digest(source[..<source_size], source_digest))
+    try sign(record())
+
+func setup(database: db.Database*) -> !:
+    let authority = try auth.Authority.attach(try database.store(), test_only = true)
+    defer authority.release()
+    try authority.value().bootstrap("alice", "fixture")
+    try repositories.initialize(database)
+    try repositories.create(database, "alice", "demo")
+    var wire: u8[256]
+    let size = try git.encode_object("commit", commit_payload, wire)
+    var id: u8[20]
+    try repositories.put_object(database, "alice", "alice", "demo", wire[..<size], id)
+    # Deterministic TEST ONLY enrolled-key fixture; enrollment has separate gates.
+    let tx = try database.begin()
+    defer tx.release()
+    let key = try prism.Value.array(prism.DType.uint8, [1952], public_key)
+    defer key.release()
+    try tx.value().set("/users/alice", "signing_key", key)
+    discard(try tx.value().commit())
+
+func publish(database: db.Database*, principal: str = "alice", configured_origin: str = origin) -> bool!:
+    return try repositories.publish_release(database, principal, "alice", "demo", configured_origin,
+        metadata[..<metadata_size], signature, source[..<source_size])
+
+func reject(database: db.Database*, principal: str = "alice", configured_origin: str = origin) -> !:
+    let before = try database.snapshot()
+    defer before.release()
+    var failed = false
+    discard(publish(database, principal, configured_origin) catch:
+        failed = true
+        recover false)
+    assert(failed)
+    let after = try database.snapshot()
+    defer after.release()
+    assert(try before.value().revision() == try after.value().revision())
+
+func read(database: db.Database*) -> !:
+    for part in ["metadata", "signature", "publisher_key", "source"]:
+        let value = try repositories.get_release(database, "alice", "alice", "demo", origin, "1.2.3", part)
+        defer value.release()
+        let expected = metadata[..<metadata_size] if part == "metadata" else (signature[..<signature.length] if part == "signature" else (public_key[..<public_key.length] if part == "publisher_key" else source[..<source_size]))
+        assert(crypto.equal(value.value().bytes(), expected))
+
+func worker(raw: void*?):
+    discard(raw)
+    discard(ready.add(1, .release))
+    while start.load(.acquire) == 0: thread.sleep(1)
+    let database = db.Database.connect(worker_socket, "release-test") catch failure: trap(failure.message)
+    defer database.release()
+    let result = publish(database.value()) catch failure:
+        assert(failure.code == prism.conflict)
+        discard(repeated.add(1, .relaxed))
+        return
+    if result: discard(created.add(1, .relaxed))
+    else: discard(repeated.add(1, .relaxed))
+
+func large(database: db.Database*) -> !:
+    let payload = try alloc u8[repositories.chunk_bytes + 4096] in memory.heap
+    defer free(payload) in memory.heap
+    var at: usize = 0
+    while at < payload.length:
+        let count = (usize)65536 if payload.length - at > 65536 else payload.length - at
+        var random_bytes = try crypto.random_secret(count)
+        defer random_bytes.close()
+        let bytes = try random_bytes.bytes()
+        for i in 0..<count: payload[at + i] = bytes[i]
+        at += count
+    let output = try alloc u8[2097152] in memory.heap
+    defer free(output) in memory.heap
+    var objects: git.Object[3]
+    objects[0] = git.Object(kind = "tree", payload = b"")
+    objects[1] = git.Object(kind = "commit", payload = commit_payload)
+    objects[2] = git.Object(kind = "blob", payload = payload)
+    let count = try git.encode_pack(objects, output)
+    assert(count > repositories.chunk_bytes)
+    var digest: u8[32]
+    discard(try pkg.source_digest(output[..<count], digest))
+    var value = record()
+    value.version = "1.2.4"
+    value.source_digest = digest
+    var meta: u8[1600]
+    let size = try pkg.encode_release(value, meta)
+    var proof: u8[3309]
+    var random: u8[32]
+    try crypto.mldsa_sign(private_key, meta[..<size], random, proof)
+    assert(try repositories.publish_release(database, "alice", "alice", "demo", origin, meta[..<size], proof, output[..<count]))
+    let stored = try repositories.get_release(database, "alice", "alice", "demo", origin, "1.2.4", "source")
+    defer stored.release()
+    assert(crypto.equal(stored.value().bytes(), output[..<count]))
+    assert(not try repositories.publish_release(database, "alice", "alice", "demo", origin, meta[..<size], proof, output[..<count]))
+    # Corrupted signature must not expose even the metadata component.
+    let tx = try database.begin()
+    defer tx.release()
+    proof[0] ^= 1
+    let corrupted = try prism.Value.array(prism.DType.uint8, [3309], proof)
+    defer corrupted.release()
+    try tx.value().set("/repositories/alice/64656d6f/releases/312e322e34", "signature", corrupted)
+    discard(try tx.value().commit())
+    var failed = false
+    let denied = repositories.get_release(database, "alice", "alice", "demo", origin, "1.2.4", "metadata") catch:
+        failed = true
+        recover try prism.Value.text("denied")
+    defer denied.release()
+    assert(failed)
+    proof[0] ^= 1
+    let restore = try database.begin()
+    defer restore.release()
+    let original = try prism.Value.array(prism.DType.uint8, [3309], proof)
+    defer original.release()
+    try restore.value().set("/repositories/alice/64656d6f/releases/312e322e34", "signature", original)
+    discard(try restore.value().commit())
+    discard(try database.bake())
+
+func cases(database: db.Database*, race: bool) -> !:
+    if race:
+        var first = try thread.spawn(worker, none)
+        var second = thread.spawn(worker, none) catch failure:
+            start.store(1, .release)
+            try first.join()
+            error(failure.code, failure.message)
+        while ready.load(.acquire) != 2: thread.sleep(1)
+        start.store(1, .release)
+        try first.join()
+        try second.join()
+        assert(created.load(.acquire) == 1 and repeated.load(.acquire) == 1)
+    else:
+        try reject(database, "bob")
+        try reject(database, configured_origin = "https://attacker.invalid")
+        signature[0] ^= 1
+        try reject(database)
+        signature[0] ^= 1
+        source[source_size - 1] ^= 1
+        try reject(database)
+        source[source_size - 1] ^= 1
+        var bad = record()
+        bad.package = "bob/demo"
+        try sign(bad)
+        try reject(database)
+        bad = record()
+        bad.commit = "0000000000000000000000000000000000000001"
+        try sign(bad)
+        try reject(database)
+        bad = record()
+        bad.toolchain = "not-a-version"
+        try sign(bad)
+        try reject(database)
+        # Valid signed digest but missing referenced tree must not publish.
+        var incomplete: git.Object[1]
+        incomplete[0] = git.Object(kind = "commit", payload = commit_payload)
+        source_size = try git.encode_pack(incomplete, source)
+        discard(try pkg.source_digest(source[..<source_size], source_digest))
+        try sign(record())
+        try reject(database)
+        var duplicate: git.Object[3]
+        duplicate[0] = git.Object(kind = "tree", payload = b"")
+        duplicate[1] = git.Object(kind = "tree", payload = b"")
+        duplicate[2] = git.Object(kind = "commit", payload = commit_payload)
+        source_size = try git.encode_pack(duplicate, source)
+        discard(try pkg.source_digest(source[..<source_size], source_digest))
+        try sign(record())
+        try reject(database)
+        try prepare()
+        assert(try publish(database))
+    assert(not try publish(database))
+    try read(database)
+    var changed = record()
+    changed.toolchain = "0.21.0"
+    try sign(changed)
+    try reject(database)
+    try prepare()
+    try read(database)
+    for principal in ["bob", "../alice"]:
+        var failed = false
+        let denied = repositories.get_release(database, principal, "alice", "demo", origin, "1.2.3", "source") catch:
+            failed = true
+            recover try prism.Value.text("denied")
+        defer denied.release()
+        assert(failed)
+    if not race: try large(database)
+
+pub func main(arguments: str[]) -> i32!:
+    assert(arguments.length == 3)
+    try prepare()
+    defer crypto.wipe(private_key)
+    let database = try db.Database.open(arguments[1], "release-test")
+    defer database.release()
+    if arguments[2] == "read":
+        try read(database.value())
+        let large_source = try repositories.get_release(database.value(), "alice", "alice", "demo", origin, "1.2.4", "source")
+        defer large_source.release()
+        assert(large_source.value().bytes().length > repositories.chunk_bytes)
+    else:
+        try setup(database.value())
+        if arguments[2] == "ipc":
+            try database.value().listen()
+            var buffer: u8[512]
+            let socket = try format(buffer, f"{arguments[1]}.sock")
+            let client = try db.Database.connect(socket, "release-test")
+            defer client.release()
+            try cases(client.value(), false)
+        elif arguments[2] == "race":
+            try database.value().listen()
+            worker_socket = try format(worker_socket_buffer, f"{arguments[1]}.sock")
+            try cases(database.value(), true)
+        else: try cases(database.value(), false)
+    print("PASS repository signed release identity, digest, closure, immutability, race and reopen")
+    return 0

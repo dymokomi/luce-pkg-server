@@ -30,6 +30,7 @@ def main():
                         (ROOT.parent / "luce-server", "SERVER"),
                         (ROOT.parent / "luce-db", "DB"),
                         (ROOT.parent / "luce-auth", "AUTH"),
+                        (ROOT.parent / "luce-pkg", "PKG"),
                         (ROOT.parent / "luce-json", "JSON"),
                         (ROOT.parent / "luce-git", "GIT"),
                         (ROOT.parent / "luce-http-client", "HTTP_CLIENT"),

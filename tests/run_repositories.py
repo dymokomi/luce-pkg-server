@@ -18,7 +18,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--base', type=Path, default=ROOT / 'build/toolchain/luce-base')
     parser.add_argument('--mode', choices=[*MODES, 'all', 'sanitize'], default='all')
-    parser.add_argument('--fixture', choices=['repositories', 'refs', 'large_objects', 'graph', 'receive'], default='repositories')
+    parser.add_argument('--fixture', choices=['repositories', 'refs', 'large_objects', 'graph', 'receive', 'releases'], default='repositories')
     parser.add_argument('--heap', action='store_true', help='also require zero macOS leaks on separate stores')
     args = parser.parse_args()
     if args.heap and sys.platform != 'darwin':

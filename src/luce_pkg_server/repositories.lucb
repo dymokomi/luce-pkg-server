@@ -8,6 +8,8 @@ import git
 import strings
 import crypto_native
 import memory
+import pkg
+import luce_pkg_server.release_pack as release_pack
 
 pub let max_object_bytes: usize = 67108864
 pub let chunk_bytes: usize = 1048576
@@ -276,6 +278,138 @@ func checked_object(session: prism.Session*, path: str, id: const u8[]) -> inter
     return value
 
 pub let max_refs: usize = 1024
+
+func release_path(path: str, version: str, output: u8[]) -> str!:
+    discard(try pkg.parse_version(version))
+    if version.length > 62: error(prism.invalid, "release version too long")
+    let digits = b"0123456789abcdef"
+    var encoded: u8[124]
+    for i in 0..<version.length:
+        encoded[i * 2] = digits[version.bytes[i] >> 4]
+        encoded[i * 2 + 1] = digits[version.bytes[i] & 15]
+    return try join([path, "/releases/", (str)encoded[..<version.length * 2]], output)
+
+func release_identity(value: pkg.Release, origin: str, owner: str, name: str, version: str) -> !:
+    var buffer: u8[100]
+    let qualified = try join([owner, "/", name], buffer)
+    if origin.length == 0 or value.origin != origin or value.package != qualified or value.version != version:
+        error(prism.invalid, "release identity mismatch")
+    discard(try pkg.parse_version(value.toolchain))
+
+func bytes_value(bytes: const u8[]) -> interop.Reference[prism.Value]!:
+    return try prism.Value.array(prism.DType.uint8, [(i64)bytes.length], bytes)
+
+## Principal is supplied by authenticated transport, never request metadata.
+## Exact retries are idempotent; a version can never be replaced. The signed
+## commit must already exist in this repository and the pack must stand alone.
+pub func publish_release(database: db.Database*, principal: str, owner: str, name: str, origin: str,
+                         metadata: const u8[], signature: const u8[], source: const u8[]) -> bool!:
+    if source.length > max_object_bytes: error(prism.invalid, "release pack exceeds limit")
+    let release = try pkg.decode_release(metadata)
+    try release_identity(release, origin, owner, name, release.version)
+    var path_buffer: u8[192]
+    let path = try repo_path(principal, owner, name, path_buffer)
+    var location_buffer: u8[352]
+    let location = try release_path(path, release.version, location_buffer)
+    var user_buffer: u8[64]
+    let user = try join(["/users/", owner], user_buffer)
+    let snapshot = try database.snapshot()
+    defer snapshot.release()
+    try require_owner(snapshot.value(), path, principal)
+    let key = try snapshot.value().get(user, "signing_key")
+    defer key.release()
+    if key.value().dtype() != prism.DType.uint8 or key.value().rank() != 1 or key.value().count() != 1952:
+        error(prism.invalid, "invalid enrolled signing key")
+    if not try pkg.verify_release(release, key.value().bytes(), signature, source):
+        error(prism.invalid, "invalid release signature or digest")
+    try release_pack.validate(source, release.commit)
+    var id: u8[20]
+    try git.decode_id(release.commit, id)
+    let commit = try checked_object(snapshot.value(), path, id)
+    defer commit.release()
+    if (try git.decode_object(commit.value().bytes())).kind != "commit": error(prism.invalid, "release target is not a commit")
+    snapshot.value().close()
+    var chunks: u8[64]
+    if source.length > chunk_bytes: try stage_chunks(database, path, source, chunks)
+    let tx = try database.begin()
+    defer tx.release()
+    try require_owner(tx.value(), path, principal)
+    let current = try tx.value().get(user, "signing_key")
+    defer current.release()
+    if not same(current.value().bytes(), key.value().bytes()): error(prism.conflict, "publisher key changed")
+    if try tx.value().contains(location):
+        let existing_metadata = try tx.value().get(location, "metadata")
+        defer existing_metadata.release()
+        let existing_signature = try tx.value().get(location, "signature")
+        defer existing_signature.release()
+        let existing_source = try load_wire(tx.value(), path, location)
+        defer existing_source.release()
+        let existing_key = try tx.value().get(location, "publisher_key")
+        defer existing_key.release()
+        if not same(existing_metadata.value().bytes(), metadata) or not same(existing_signature.value().bytes(), signature) or not same(existing_source.value().bytes(), source) or not same(existing_key.value().bytes(), key.value().bytes()):
+            error(prism.conflict, "release version is immutable")
+        discard(try database.bake(wait_ms = 1000))
+        return false
+    var root_buffer: u8[208]
+    let root = try join([path, "/releases"], root_buffer)
+    if not try tx.value().contains(root): try tx.value().add(root, "directory")
+    try tx.value().add(location, "signed-release")
+    let meta_value = try bytes_value(metadata)
+    defer meta_value.release()
+    let sig_value = try bytes_value(signature)
+    defer sig_value.release()
+    try tx.value().set(location, "metadata", meta_value)
+    try tx.value().set(location, "signature", sig_value)
+    try tx.value().set(location, "publisher_key", key)
+    # Serialize publication with future key changes, not merely a read predicate.
+    try tx.value().set(user, "signing_key", current)
+    if source.length <= chunk_bytes:
+        let source_value = try bytes_value(source)
+        defer source_value.release()
+        try tx.value().set(location, "wire", source_value)
+    else:
+        let format_value = try prism.Value.text("chunks-v1")
+        defer format_value.release()
+        let size = try prism.Value.integer((i64)source.length)
+        defer size.release()
+        let chunk_value = try prism.Value.text((str)chunks)
+        defer chunk_value.release()
+        try tx.value().set(location, "format", format_value)
+        try tx.value().set(location, "size", size)
+        try tx.value().set(location, "chunks", chunk_value)
+    discard(try tx.value().commit(wait_ms = 1000))
+    discard(try database.bake(wait_ms = 1000))
+    return true
+
+## Owning byte array. Verify stored signature, identity and source digest before
+## returning any component. Historical publisher key is part of immutable record.
+pub func get_release(database: db.Database*, principal: str, owner: str, name: str, origin: str,
+                     version: str, part: str) -> interop.Reference[prism.Value]!:
+    if part != "metadata" and part != "signature" and part != "publisher_key" and part != "source":
+        error(prism.invalid, "unknown release component")
+    var path_buffer: u8[192]
+    let path = try repo_path(principal, owner, name, path_buffer)
+    var location_buffer: u8[352]
+    let location = try release_path(path, version, location_buffer)
+    let snapshot = try database.snapshot()
+    defer snapshot.release()
+    try require_owner(snapshot.value(), path, principal)
+    let metadata = try snapshot.value().get(location, "metadata")
+    defer metadata.release()
+    let signature = try snapshot.value().get(location, "signature")
+    defer signature.release()
+    let key = try snapshot.value().get(location, "publisher_key")
+    defer key.release()
+    let source = try load_wire(snapshot.value(), path, location)
+    defer source.release()
+    let release = try pkg.decode_release(metadata.value().bytes())
+    try release_identity(release, origin, owner, name, version)
+    if not try pkg.verify_release(release, key.value().bytes(), signature.value().bytes(), source.value().bytes()):
+        error(prism.invalid, "stored release verification failed")
+    if part == "source": return try bytes_value(source.value().bytes())
+    if part == "metadata": return try bytes_value(metadata.value().bytes())
+    if part == "signature": return try bytes_value(signature.value().bytes())
+    return try bytes_value(key.value().bytes())
 
 func push_capabilities(capabilities: str) -> !:
     var start: usize = 0
