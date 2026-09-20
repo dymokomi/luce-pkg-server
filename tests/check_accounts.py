@@ -13,7 +13,8 @@ import time
 import object_http
 import git_http
 
-binary, fixture, client = [Path(arg).resolve() for arg in sys.argv[1:]]
+binary, fixture, client = [Path(arg).resolve() for arg in sys.argv[1:4]]
+registration_client = Path(sys.argv[4]).resolve() if len(sys.argv) == 5 else None
 
 def request(port, method, path, value=None, headers=None):
     payload = json.dumps(value).encode() if value is not None else b''
@@ -56,7 +57,16 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             # Unknown invitations cannot create users; duplicate account must not burn a valid invite.
             assert request(port, 'POST', '/v1/invites/redeem', {'code': '0' * 32, 'name': 'testuser', 'password': 'fixture-pass'})[0] == 400
             assert request(port, 'POST', '/v1/invites/redeem', {'code': code, 'name': 'testadmin', 'password': 'changed'})[0] == 409
-            assert request(port, 'POST', '/v1/invites/redeem', {'code': code, 'name': 'testuser', 'password': 'fixture-pass'}) == (201, b'registered')
+            if registration_client is None:
+                assert request(port, 'POST', '/v1/invites/redeem', {'code': code, 'name': 'testuser', 'password': 'fixture-pass'}) == (201, b'registered')
+            else:
+                registered = subprocess.run([str(registration_client), 'register', f'http://127.0.0.1:{port}',
+                                             'testuser', '--secrets-stdin'], input=code.encode() + b'\nfixture-pass\n',
+                                            capture_output=True, timeout=60)
+                assert registered.returncode == 0, registered.stderr
+                assert code.encode() not in registered.stdout + registered.stderr
+                assert b'fixture-pass' not in registered.stdout + registered.stderr
+                print('PASS luc invited registration against native registry', flush=True)
             assert request(port, 'POST', '/v1/invites/redeem', {'code': code, 'name': 'other', 'password': 'fixture-pass'})[0] == 400
             def register(name):
                 return request(port, 'POST', '/v1/invites/redeem', {'code': race_code, 'name': name, 'password': 'race-pass'})[0]
