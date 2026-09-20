@@ -8,8 +8,11 @@ import zlib
 from object_http import transfer
 
 
-def check(port, headers, root, request):
-    assert request(port, 'POST', '/v1/repositories', {'name': 'git-wire'}, headers)[0] == 201
+def check(port, headers, root, request, create_repository=None):
+    if create_repository is None:
+        assert request(port, 'POST', '/v1/repositories', {'name': 'git-wire'}, headers)[0] == 201
+    else:
+        create_repository('git-wire')
     endpoint = f'http://127.0.0.1:{port}/git/testuser/git-wire'
     assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack')[0] == 401
     assert request(port, 'GET', '/git/testadmin/git-wire/info/refs?service=git-receive-pack', headers=headers)[0] == 403
