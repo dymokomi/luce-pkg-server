@@ -12,9 +12,9 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-15]
     runs-on: ${{ matrix.os }}
-    # The exhaustive generated-C/sanitizer matrix can exceed 45 minutes on a
-    # cold two-core hosted runner without being stalled.
-    timeout-minutes: 75
+    # The exhaustive generated-C/sanitizer and repository stress matrices take
+    # more than 75 minutes on a cold two-core Linux runner without being stalled.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
