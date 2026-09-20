@@ -40,6 +40,8 @@ nonblocking admission gate; login overload returns 503 (registration already map
 service failures to 503). Sessions have a persisted absolute 24-hour lifetime;
 expired sessions and legacy sessions without timestamps are unauthorized. The
 auth library independently validates token syntax before any storage operation.
+Only SHA-256-derived session identifiers are stored; raw bearer values never
+appear in Prism paths or fields, and old raw-token-keyed records fail closed.
 Per-account rate limits, session cleanup and production credential policy are
 pending. Native ML-DSA-65 release signatures are implemented below.
 
