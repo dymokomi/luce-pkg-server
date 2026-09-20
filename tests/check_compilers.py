@@ -43,7 +43,9 @@ def check(base, luce, modes):
     base, luce = Path(base).resolve(), Path(luce).resolve()
     profile = json.loads(PROFILE.read_text())
     assert profile["schema_version"] == 1 and profile["modes"] == list(MODES)
-    environment = dict(os.environ, LUCE_BASE=str(base))
+    environment = dict(os.environ, LUCE_BASE=str(base),
+                       LUCE_STD=str(ROOT.parent / "luce-base/src/std"),
+                       LUCE_CACHE=str(ROOT / "build/cache"))
     original_fixture = snapshot(FIXTURE)
     count = 0
 

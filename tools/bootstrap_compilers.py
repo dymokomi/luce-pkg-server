@@ -22,9 +22,12 @@ def main():
         if subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"]):
             raise SystemExit(f"dirty compiler source: {source}")
     OUT.mkdir(parents=True, exist_ok=True)
+    environment = dict(os.environ)
+    environment["LUCE_STD"] = str(base / "src/std")
 
     def run(command):
-        subprocess.run([str(arg) for arg in command], cwd=ROOT, check=True, timeout=180)
+        subprocess.run([str(arg) for arg in command], cwd=ROOT, env=environment,
+                       check=True, timeout=180)
 
     run([os.environ.get("CC", "cc"), "-std=gnu11", "-O2", "-w", "-fno-strict-aliasing",
          "-I", base / "runtime", base / "bootstrap" / f"luce-base-{host}.c",
