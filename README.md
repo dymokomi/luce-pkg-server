@@ -38,8 +38,29 @@ nonblocking admission gate; login overload returns 503 (registration already map
 service failures to 503). Sessions have a persisted absolute 24-hour lifetime;
 expired sessions and legacy sessions without timestamps are unauthorized. The
 auth library independently validates token syntax before any storage operation.
-Per-account rate limits, session cleanup, account signatures and production
+Per-account rate limits, session cleanup, release signatures and production
 credential policy are pending.
+
+Account signing-key enrollment uses native ML-DSA-65. Set `LUCE_REGISTRY_ORIGIN`
+to the exact canonical origin clients sign (for example `https://pkg.luciaos.com`);
+this is a trusted operator identifier, not a URL normalization or TLS check.
+It must be at most 255 printable non-space ASCII bytes. Missing/empty configuration
+disables enrollment with 503 after authentication; malformed configuration fails
+startup. Neither `Host` nor forwarded headers establish this origin.
+Authenticated `POST /v1/identity/key-challenge` takes an empty body and returns a
+32-byte binary nonce. `POST /v1/identity/key` requires `application/octet-stream`
+and exactly 5261 bytes: the 1952-byte public key followed by a 3309-byte proof using
+the `luce-auth/account-possession/v1` transcript. It returns 201 `enrolled`.
+Malformed requests/proofs return 400, wrong media type 415, invalid sessions 401,
+enrollment/transaction conflicts 409, and operational failure 503. All responses
+are no-store. Authentication is checked again inside the mutation transaction.
+One replaceable challenge per account expires after five minutes. First enrollment
+atomically binds the key and consumes the challenge, including across restarts;
+no rotation/recovery or key-distribution endpoint exists yet. A 409 is not proof
+that a particular key was enrolled. Commit/durability failures may occur after
+publication: do not assume a failed response guarantees unchanged state. Challenge
+rate limiting and public deployment remain pending. These routes have a separate
+5261-byte handler limit; the existing 4 KiB account JSON limits are unchanged.
 It binds `127.0.0.1` only. This is not `pkg.luciaos.com`, complete Git hosting, signed
 releases or real credentials. A green roadmap check is not an authentication,
 storage, cryptography or deployment gate.

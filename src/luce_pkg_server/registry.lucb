@@ -11,6 +11,7 @@ import strings
 import repositories
 import git
 import memory
+import account_identity as keys
 
 func failed(code: ErrorCode, message: str) -> interop.Outcome[interop.Reference[http.Response]]:
     let copied = interop.copy_text(message) catch failure:
@@ -48,6 +49,8 @@ func field(root: json.View, name: str) -> str!:
 struct App:
     var database: interop.Reference[db.Database]
     var authority: interop.Reference[auth.Authority]
+    var origin: u8[255]
+    var origin_size: usize = 0
 
     mutating func close():
         self.authority.release()
@@ -56,6 +59,40 @@ struct App:
     func health(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
         discard(view)
         return reply("ok")
+
+    func key_challenge(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
+        let token = bearer(view.value()) catch: return reply("unauthorized", 401)
+        let who = self.authority.value().verify(token) catch: return reply("unauthorized", 401)
+        defer who.release()
+        if self.origin_size == 0: return reply("key enrollment unavailable", 503)
+        let body = view.value().body() catch: return reply("invalid body", 400)
+        defer body.release()
+        let payload = body.value().bytes(1) catch: return reply("invalid body", 400)
+        if payload.length != 0: return reply("invalid body", 400)
+        let nonce = self.authority.value().key_challenge(token, (str)self.origin[..<self.origin_size]) catch failure:
+            if failure.code == auth.conflict: return reply("key enrollment conflict", 409)
+            return reply("challenge unavailable", 503)
+        defer nonce.release()
+        return binary_reply(nonce.value().bytes(), "application/octet-stream")
+
+    func enroll_key(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
+        let request = view.value()
+        let token = bearer(request) catch: return reply("unauthorized", 401)
+        let who = self.authority.value().verify(token) catch: return reply("unauthorized", 401)
+        defer who.release()
+        if self.origin_size == 0: return reply("key enrollment unavailable", 503)
+        let content_type = (request.header("Content-Type") catch: return reply("invalid headers", 400)) else ""
+        if content_type != "application/octet-stream": return reply("unsupported content type", 415)
+        let body = request.body() catch: return reply("invalid body", 400)
+        defer body.release()
+        let payload = body.value().bytes(5261) catch: return reply("invalid body", 400)
+        if payload.length != 5261: return reply("invalid body", 400)
+        self.authority.value().enroll_key(token, (str)self.origin[..<self.origin_size], payload[..<1952], payload[1952..]) catch failure:
+            if failure.code == auth.conflict: return reply("key enrollment conflict", 409)
+            if failure.code == auth.invalid or failure.code == keys.invalid or failure.code == auth.missing:
+                return reply("invalid key proof", 400)
+            return reply("enrollment unavailable", 503)
+        return reply("enrolled", 201)
 
     func identity(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
         let token = bearer(view.value()) catch: return reply("unauthorized", 401)
@@ -227,6 +264,13 @@ func store_token() -> str!:
     if token.length == 0: error(auth.invalid, "empty store token")
     return token
 
+func configured_origin() -> str!:
+    let origin = os.env((c.str)"LUCE_REGISTRY_ORIGIN") else ""
+    if origin.length > 255: error(auth.invalid, "registry origin exceeds 255 bytes")
+    for byte in origin.bytes:
+        if byte < 33 or byte > 126: error(auth.invalid, "invalid registry origin")
+    return origin
+
 func configure(socket: str) -> interop.Outcome[http.Application]:
     let database = db.Database.connect(socket, store_token() catch failure: trap(failure.message)) catch failure: trap(failure.message)
     let authority = auth.Authority.attach(database.value().store() catch failure: trap(failure.message)) catch failure:
@@ -236,6 +280,10 @@ func configure(socket: str) -> interop.Outcome[http.Application]:
         authority.release()
         database.release()
         trap(failure.message)
+    let origin = configured_origin() catch failure: trap(failure.message)
+    for i in 0..<origin.length:
+        native.origin[i] = origin.bytes[i]
+    native.origin_size = origin.length
     let app = interop.Reference[App].adopt(native, app_type) catch failure: trap(failure.message)
     defer app.release()
     var router = http.Router() catch failure: trap(failure.message)
@@ -246,6 +294,12 @@ func configure(socket: str) -> interop.Outcome[http.Application]:
     let identity = http.Handler.bind(app, App.identity) catch failure: trap(failure.message)
     defer identity.release()
     router.get("/v1/identity", identity) catch failure: trap(failure.message)
+    let key_challenge = http.Handler.bind(app, App.key_challenge) catch failure: trap(failure.message)
+    defer key_challenge.release()
+    router.post("/v1/identity/key-challenge", key_challenge) catch failure: trap(failure.message)
+    let enroll_key = http.Handler.bind(app, App.enroll_key) catch failure: trap(failure.message)
+    defer enroll_key.release()
+    router.post("/v1/identity/key", enroll_key) catch failure: trap(failure.message)
     let redeem = http.Handler.bind(app, App.redeem) catch failure: trap(failure.message)
     defer redeem.release()
     router.post("/v1/invites/redeem", redeem) catch failure: trap(failure.message)
@@ -272,6 +326,7 @@ func configure(socket: str) -> interop.Outcome[http.Application]:
 
 func run(arguments: str[]) -> i32!:
     if arguments.length != 3: return 2
+    discard(try configured_origin())
     var port: i64 = 0
     for byte in arguments[2].bytes:
         if byte < '0' or byte > '9': return 2

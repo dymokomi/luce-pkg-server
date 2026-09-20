@@ -12,6 +12,7 @@ import tempfile
 import time
 import object_http
 import git_http
+import key_http
 
 binary, fixture, client = [Path(arg).resolve() for arg in sys.argv[1:4]]
 registration_client = Path(sys.argv[4]).resolve() if len(sys.argv) == 5 else None
@@ -34,7 +35,8 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
     with socket.socket() as probe:
         probe.bind(('127.0.0.1', 0))
         port = probe.getsockname()[1]
-    env = dict(os.environ, LUCE_REGISTRY_STORE_TOKEN='integration-store-token')
+    env = dict(os.environ, LUCE_REGISTRY_STORE_TOKEN='integration-store-token',
+               LUCE_REGISTRY_ORIGIN=key_http.ORIGIN)
     with (root / 'server.log').open('w+') as log:
         process = subprocess.Popen([str(binary), str(database), str(port)], env=env,
                                    stdout=log, stderr=subprocess.STDOUT)
@@ -95,6 +97,7 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
                                                 {'name': 'testadmin', 'password': 'fixture-password'})
             assert admin_status == 200
             admin_headers = {'Authorization': 'Bearer ' + admin_token.decode()}
+            key_http.check(port, headers, admin_headers, fixture)
             assert request(port, 'POST', endpoint, {'name': 'demo'}, admin_headers)[0] == 201
             object_path, object_bytes = object_http.check(port, headers, admin_headers)
             git_commit = git_http.check(port, headers, root, request)
@@ -105,6 +108,7 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
                 assert all(value == (200, b'testuser') for value in pool.map(identity, range(32)))
             assert request(port, 'POST', '/v1/sessions/revoke', headers=headers) == (200, b'revoked')
             assert request(port, 'GET', '/v1/identity', headers=headers)[0] == 401
+            assert request(port, 'POST', key_http.CHALLENGE, headers=headers)[0] == 401
             assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack', headers=headers)[0] == 401
             assert request(port, 'POST', endpoint, {'name': 'revoked'}, headers)[0] == 401
             assert object_http.transfer(port, 'GET', object_path, headers=headers)[0] == 401
@@ -143,6 +147,7 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             assert status == 200 and len(restored) == 32
             assert request(port, 'GET', '/v1/identity', headers={'Authorization': 'Bearer ' + restored.decode()}) == (200, b'testuser')
             restored_headers = {'Authorization': 'Bearer ' + restored.decode()}
+            key_http.persisted(port, restored_headers)
             status, advertisement = request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack', headers=restored_headers)
             assert status == 200 and git_commit + b' refs/heads/main' in advertisement
             subprocess.run([str(client), str(port)], check=True, timeout=120)
@@ -163,6 +168,39 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
                 process.wait(timeout=5)
                 raise AssertionError('restarted registry failed to shut down')
         assert process.returncode == 0, process.returncode
+        # Missing origin disables enrollment, never derives it from HTTP headers.
+        env.pop('LUCE_REGISTRY_ORIGIN')
+        process = subprocess.Popen([str(binary), str(database), str(port)], env=env,
+                                   stdout=log, stderr=subprocess.STDOUT)
+        try:
+            deadline = time.monotonic() + 20
+            while True:
+                assert process.poll() is None, 'unconfigured registry failed'
+                try:
+                    if request(port, 'GET', '/health') == (200, b'ok'):
+                        break
+                except OSError:
+                    pass
+                assert time.monotonic() < deadline, 'unconfigured registry timeout'
+                time.sleep(.05)
+            for endpoint in (key_http.CHALLENGE, key_http.ENROLL):
+                assert request(port, 'POST', endpoint)[0] == 401
+                assert request(port, 'POST', endpoint, headers=restored_headers)[0] == 503
+        finally:
+            process.terminate()
+            try:
+                process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+                raise AssertionError('unconfigured registry failed to shut down')
+        assert process.returncode == 0, process.returncode
+    for bad_origin in ('bad origin', 'a' * 256):
+        result = subprocess.run([str(binary), str(root / 'unused.db'), '0'],
+                                env=dict(env, LUCE_REGISTRY_ORIGIN=bad_origin),
+                                capture_output=True, timeout=10)
+        assert result.returncode != 0
+        assert not (root / 'unused.db').exists()
 print('PASS real registry accounts: invited registration, login, parallel identity, revoke, proxy spoof rejection')
 print('PASS restart preserves users, invitation consumption and session revocation')
 print('PASS authenticated repository creation, namespace isolation, races, revocation and restart')

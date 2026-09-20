@@ -1,7 +1,32 @@
 ## Disposable integration-test credentials only; not an administrative CLI.
 import auth
+import account_identity as keys
+
+func nibble(byte: u8) -> u8:
+    if byte >= '0' and byte <= '9': return byte - '0'
+    assert(byte >= 'a' and byte <= 'f')
+    return byte - 'a' + 10
+
+func proof(arguments: str[]) -> i32!:
+    assert(arguments.length == 5 and arguments[4].length == 64)
+    var nonce: u8[32]
+    for i in 0..<32:
+        nonce[i] = (nibble(arguments[4].bytes[i * 2]) << 4) | nibble(arguments[4].bytes[i * 2 + 1])
+    # Deliberately public test seed, never used for a real account.
+    var seed: u8[32]
+    var wire: u8[5261]
+    try keys.public_key(seed, wire[..<1952])
+    try keys.prove(seed, arguments[2], arguments[3], nonce, wire[1952..])
+    var output: u8[10522]
+    let digits = b"0123456789abcdef"
+    for i in 0..<wire.length:
+        output[i * 2] = digits[wire[i] >> 4]
+        output[i * 2 + 1] = digits[wire[i] & 15]
+    print((str)output)
+    return 0
 
 pub func main(arguments: str[]) -> i32!:
+    if arguments.length > 1 and arguments[1] == "proof": return try proof(arguments)
     assert(arguments.length == 2)
     let authority = try auth.Authority.open(arguments[1], "integration-store-token")
     defer authority.release()
