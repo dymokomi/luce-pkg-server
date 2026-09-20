@@ -3,7 +3,7 @@
   "id": "pinned-v1",
   "status": "compatibility_fixture_not_installer",
   "base_source": "fff2ed6afd4060acb013f57b1af57ada454cd37b",
-  "luce_source": "5823f29ccb0f68388d3f3226c37232506c4c20e5",
+  "luce_source": "9e6f48e9769524609c9a0fe6b73a67733a5fcd75",
   "manifest": "luce.toml",
   "resolve_protocol": "luce-base-module-v1",
   "dependencies_protocol": "luce-base-dependencies-v3",
