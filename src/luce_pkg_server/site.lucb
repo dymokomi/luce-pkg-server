@@ -89,18 +89,18 @@ pub func write_nested(site: str, owner: str, name: str, relative: str, bytes: co
     defer strings.release(terminated_path)
     try files.write_atomic((c.str)terminated_path, bytes)
 
-## The package list for a registry that has released nothing yet.
+## Rewrite the front page from the current package list. Done at every start, so a new
+## release of the registry refreshes its wording without waiting for a package release.
 pub func ensure_front_page(site: str) -> !:
     try ensure_directory(site)
-    let path = try paths.join(site, "index.html")
-    defer strings.release(path)
-    let name = try terminated(path)
-    defer strings.release(name)
-    if files.exists((c.str)name): return
-    let html = try alloc u8[65536] in memory.heap
+    let index_path = try paths.join(site, "index")
+    defer strings.release(index_path)
+    let listing = try read_listing(index_path)
+    defer discard_listing(listing)
+    let html = try alloc u8[pages.max_page] in memory.heap
     defer free(html) in memory.heap
     var front = pages.page(html)
-    try pages.index_page(&front, b"")
+    try pages.index_page(&front, listing)
     try write_page(site, html[..<front.used])
 
 func render_readme(readme: const u8[], output: u8[]) -> usize!:

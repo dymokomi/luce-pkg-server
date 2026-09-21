@@ -196,6 +196,7 @@ language = "luce-base"
     assert (root / 'site' / 'index').read_text() == 'testuser/git-wire\t1.3.0\tRelease fixture\n'
     front = (root / 'site' / 'index.html').read_text()
     assert '<a class="card" href="/testuser/git-wire/">' in front and 'Release fixture' in front
+    assert 'Find, install and publish Luce packages' in front and '<p class="count">1 package</p>' in front
     detail = (site / 'index.html').read_text()
     assert '<h1>testuser/git-wire</h1>' in detail and 'luc add testuser/git-wire' in detail
     assert hashlib.sha256(pack).hexdigest() in detail and released[:12] in detail

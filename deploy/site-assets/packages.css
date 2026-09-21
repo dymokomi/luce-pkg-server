@@ -1,6 +1,7 @@
 /* The only styles the package site adds to the shared Luce stylesheets. */
-article .find { margin: 1.5rem 0 1rem; }
-article .find input { width: 100%; max-width: 28rem; }
+article .find { margin: 1.5rem 0 .5rem; }
+article .find input { width: 100%; max-width: 34rem; padding: .6rem .8rem; font-size: 1.05rem; }
+p.count { margin: 0 0 1.5rem; color: var(--ink-soft); }
 .card[hidden] { display: none; }
 
 /* README fragments are plain HTML without the site's wrappers. */
