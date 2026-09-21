@@ -1,0 +1,118 @@
+name: Correctness
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: static-and-compiler-profile, runner: ubuntu-24.04, kind: static}
+          - {name: registry-native0, runner: ubuntu-24.04, kind: registry, mode: native0}
+          - {name: registry-native1, runner: ubuntu-24.04, kind: registry, mode: native1}
+          - {name: registry-native2, runner: ubuntu-24.04, kind: registry, mode: native2}
+          - {name: registry-native3-linux, runner: ubuntu-24.04, kind: registry, mode: native3}
+          - {name: registry-native3-macos, runner: macos-15, kind: registry, mode: native3}
+          - {name: registry-c, runner: ubuntu-24.04, kind: registry, mode: c}
+          - {name: registry-c-release, runner: ubuntu-24.04, kind: registry, mode: c-release}
+          - {name: repositories, runner: ubuntu-24.04, kind: repository, fixture: repositories, mode: native3}
+          - {name: refs, runner: ubuntu-24.04, kind: repository, fixture: refs, mode: native3}
+          - {name: large-objects, runner: ubuntu-24.04, kind: repository, fixture: large_objects, mode: native3}
+          - {name: graph, runner: ubuntu-24.04, kind: repository, fixture: graph, mode: native3}
+          - {name: receive, runner: ubuntu-24.04, kind: repository, fixture: receive, mode: native3}
+          - {name: releases, runner: ubuntu-24.04, kind: repository, fixture: releases, mode: native3}
+          - {name: pull-requests, runner: ubuntu-24.04, kind: repository, fixture: pull_requests, mode: native3}
+          - {name: repository-native0, runner: ubuntu-24.04, kind: repository, fixture: repositories, mode: native0}
+          - {name: repository-native1, runner: ubuntu-24.04, kind: repository, fixture: repositories, mode: native1}
+          - {name: repository-native2, runner: ubuntu-24.04, kind: repository, fixture: repositories, mode: native2}
+          - {name: repository-c, runner: ubuntu-24.04, kind: repository, fixture: repositories, mode: c}
+          - {name: repository-c-release, runner: ubuntu-24.04, kind: repository, fixture: repositories, mode: c-release}
+          - {name: registry-sanitizers, runner: ubuntu-24.04, kind: sanitize-registry}
+          - {name: repository-sanitizers, runner: ubuntu-24.04, kind: sanitize, fixture: repositories}
+          - {name: refs-sanitizers, runner: ubuntu-24.04, kind: sanitize, fixture: refs}
+          - {name: large-objects-sanitizers, runner: ubuntu-24.04, kind: sanitize, fixture: large_objects}
+          - {name: graph-sanitizers, runner: ubuntu-24.04, kind: sanitize, fixture: graph}
+          - {name: receive-sanitizers, runner: ubuntu-24.04, kind: sanitize, fixture: receive}
+          - {name: releases-sanitizers, runner: ubuntu-24.04, kind: sanitize, fixture: releases}
+          - {name: pull-requests-sanitizers, runner: ubuntu-24.04, kind: sanitize, fixture: pull_requests}
+          - {name: refs-macos-heap, runner: macos-15, kind: heap, fixture: refs, mode: native0}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          path: luce-pkg-server
+      - name: Read dependency pins
+        id: pins
+        shell: bash
+        run: |
+          for pin in AUTH BASE COMPRESS CRYPTO DB GIT HTTP_CLIENT JSON LUCE PKG PRISM SERVER TLS; do
+            key=$(printf '%s' "$pin" | tr '[:upper:]' '[:lower:]')
+            echo "$key=$(cat luce-pkg-server/bootstrap/$pin)" >> "$GITHUB_OUTPUT"
+          done
+      - uses: actions/checkout@v7
+        with: {repository: dymokomi/luce-auth, ref: "${{ steps.pins.outputs.auth }}", path: luce-auth}
+      - uses: actions/checkout@v7
+        with: {repository: dymokomi/luce-base, ref: "${{ steps.pins.outputs.base }}", path: luce-base}
+      - uses: actions/checkout@v7
+        with: {repository: dymokomi/luce-compress, ref: "${{ steps.pins.outputs.compress }}", path: luce-compress}
+      - uses: actions/checkout@v7
+        with: {repository: dymokomi/luce-crypto, ref: "${{ steps.pins.outputs.crypto }}", path: luce-crypto}
+      - uses: actions/checkout@v7
+        with: {repository: dymokomi/luce-db, ref: "${{ steps.pins.outputs.db }}", path: luce-db}
+      - uses: actions/checkout@v7
+        with: {repository: dymokomi/luce-git, ref: "${{ steps.pins.outputs.git }}", path: luce-git}
+      - uses: actions/checkout@v7
+        with: {repository: dymokomi/luce-http-client, ref: "${{ steps.pins.outputs.http_client }}", path: luce-http-client}
+      - uses: actions/checkout@v7
+        with: {repository: dymokomi/luce-json, ref: "${{ steps.pins.outputs.json }}", path: luce-json}
+      - uses: actions/checkout@v7
+        with: {repository: dymokomi/luce, ref: "${{ steps.pins.outputs.luce }}", path: luce}
+      - uses: actions/checkout@v7
+        with: {repository: dymokomi/luce-pkg, ref: "${{ steps.pins.outputs.pkg }}", path: luce-pkg}
+      - uses: actions/checkout@v7
+        with: {repository: dymokomi/luce-prism, ref: "${{ steps.pins.outputs.prism }}", path: luce-prism}
+      - uses: actions/checkout@v7
+        with: {repository: dymokomi/luce-server, ref: "${{ steps.pins.outputs.server }}", path: luce-server}
+      - uses: actions/checkout@v7
+        with: {repository: dymokomi/luce-tls, ref: "${{ steps.pins.outputs.tls }}", path: luce-tls}
+      - name: Select Clang
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/luce-bin"
+          ln -s "$(command -v clang)" "$RUNNER_TEMP/luce-bin/cc"
+          echo "$RUNNER_TEMP/luce-bin" >> "$GITHUB_PATH"
+      - name: Build pinned toolchain
+        working-directory: luce-pkg-server
+        run: python3 tools/bootstrap_registry.py
+      - name: Static contracts and compiler profile
+        if: matrix.kind == 'static'
+        working-directory: luce-pkg-server
+        run: |
+          python3 tests/check_roadmap.py
+          python3 tests/test_compiler_protocols.py
+          python3 tests/test_heap_process.py
+          python3 tests/check_compilers.py --mode native3
+      - name: Registry integration
+        if: matrix.kind == 'registry'
+        working-directory: luce-pkg-server
+        run: python3 tests/run_registry.py --mode ${{ matrix.mode }}
+      - name: Repository integration
+        if: matrix.kind == 'repository'
+        working-directory: luce-pkg-server
+        run: python3 tests/run_repositories.py --fixture ${{ matrix.fixture }} --mode ${{ matrix.mode }}
+      - name: Registry sanitizers
+        if: matrix.kind == 'sanitize-registry'
+        working-directory: luce-pkg-server
+        run: python3 tests/sanitize_registry.py --base build/toolchain/luce-base
+      - name: Repository sanitizers
+        if: matrix.kind == 'sanitize'
+        working-directory: luce-pkg-server
+        run: python3 tests/run_repositories.py --fixture ${{ matrix.fixture }} --mode sanitize
+      - name: macOS heap gate
+        if: matrix.kind == 'heap'
+        working-directory: luce-pkg-server
+        run: python3 tests/run_repositories.py --fixture ${{ matrix.fixture }} --mode ${{ matrix.mode }} --heap
+
