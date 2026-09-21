@@ -1,0 +1,51 @@
+name: Deployment bundle
+# Builds only the immutable Linux bundle, in minutes. The exhaustive test matrix in
+# registry.yml builds the same bundle at the end of a two-hour job; this one exists so
+# a deploy does not wait for it. Both build from the same commit and dependency pins.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  bundle:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: luce-pkg-server
+      - name: Check out exact registry dependencies
+        working-directory: luce-pkg-server
+        shell: bash
+        run: |
+          for entry in BASE:luce-base LUCE:luce SERVER:luce-server DB:luce-db AUTH:luce-auth CRYPTO:luce-crypto PRISM:luce-prism TLS:luce-tls JSON:luce-json GIT:luce-git COMPRESS:luce-compress HTTP_CLIENT:luce-http-client PKG:luce-pkg; do
+            pin="${entry%%:*}"
+            repo="${entry#*:}"
+            revision=$(cat "bootstrap/$pin")
+            [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || exit 1
+            git init "../$repo"
+            git -C "../$repo" remote add origin "https://github.com/dymokomi/$repo.git"
+            git -C "../$repo" fetch --depth 1 origin "$revision"
+            git -C "../$repo" checkout --detach FETCH_HEAD
+          done
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+      - name: Bootstrap registry dependencies without language changes
+        working-directory: luce-pkg-server
+        run: python3 tools/bootstrap_registry.py
+      - name: Build immutable Linux deployment bundle
+        working-directory: luce-pkg-server
+        shell: bash
+        run: |
+          ./deploy/build-release.sh \
+            "$PWD/build/toolchain/luce-base" \
+            "$GITHUB_SHA" \
+            "$PWD/build/luce-pkg-server-$GITHUB_SHA-linux-x86_64"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bundle-${{ github.sha }}-linux-x86_64
+          path: luce-pkg-server/build/luce-pkg-server-${{ github.sha }}-linux-x86_64
+          if-no-files-found: error
