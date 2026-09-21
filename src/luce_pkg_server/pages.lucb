@@ -84,11 +84,13 @@ pub func index_page(out: Page*, listing: const u8[]) -> !:
     var total: usize
     for byte in listing:
         if byte == '\n': total += 1
-    try out.put("<div class=\"side\">\n<details class=\"nav\" open>\n<summary>Pages</summary>\n<ul>\n<li><a class=\"here\" href=\"/\">Packages</a></li>\n</ul>\n</details>\n<details class=\"nav\" open>\n<summary>On this page</summary>\n<ul>\n<li class=\"h2\"><a href=\"#packages-list\">Packages</a></li><li class=\"h2\"><a href=\"#installing\">Installing</a></li><li class=\"h2\"><a href=\"#publishing\">Publishing</a></li>\n</ul>\n</details>\n</div>\n<main id=\"content\">\n<article>\n<h1>Find, install and publish Luce packages</h1>\n<div class=\"find\"><input id=\"filter\" type=\"search\" placeholder=\"Search packages\" aria-label=\"Search packages\" autocomplete=\"off\"></div>\n<p class=\"count\">")
+    try out.put("<div class=\"side\">\n<details class=\"nav\" open>\n<summary>Pages</summary>\n<ul>\n<li><a class=\"here\" href=\"/\">Packages</a></li>\n</ul>\n</details>\n<details class=\"nav\" open>\n<summary>On this page</summary>\n<ul>\n<li class=\"h2\"><a href=\"#installing\">Installing</a></li><li class=\"h2\"><a href=\"#publishing\">Publishing</a></li>\n</ul>\n</details>\n</div>\n<main id=\"content\">\n<article>\n<h1>Find, install and publish Luce packages</h1>\n<div class=\"find\"><input id=\"filter\" type=\"search\" placeholder=\"Search packages\" aria-label=\"Search packages\" autocomplete=\"off\"></div>\n<p class=\"count\">")
     var number: u8[32]
     try out.put(try format(number, f"{total}"))
     try out.put(" package" if total == 1 else " packages")
-    try out.put("</p>\n<h2 id=\"packages-list\">Packages<a class=\"anchor\" href=\"#packages-list\" aria-label=\"link to this section\">#</a></h2>\n<div class=\"cards\" id=\"packages\">\n")
+    try out.put("</p>\n")
+    # The list and its heading appear once there is something to list.
+    if total > 0: try out.put("<h2 id=\"packages-list\">Packages<a class=\"anchor\" href=\"#packages-list\" aria-label=\"link to this section\">#</a></h2>\n<div class=\"cards\" id=\"packages\">\n")
     var start: usize
     for end in 0..<listing.length:
         if listing[end] != '\n': continue
@@ -107,8 +109,7 @@ pub func index_page(out: Page*, listing: const u8[]) -> !:
             try out.put(" &middot; ")
         try out.escaped(field(line, '\t', 1))
         try out.put("</span></a>\n")
-    try out.put("</div>\n")
-    if total == 0: try out.put("<p>Nothing has been published yet.</p>\n")
+    if total > 0: try out.put("</div>\n")
     try out.put("<p>The Luce Package Index is a repository of libraries and applications for the <a href=\"https://luce.luciaos.com\">Luce</a> and <a href=\"https://luce-base.luciaos.com\">Luce Base</a> programming languages.</p>\n<h2 id=\"installing\">Installing<a class=\"anchor\" href=\"#installing\" aria-label=\"link to this section\">#</a></h2>\n<p>Add a library to your project. <code>luc</code> resolves its dependencies and records exact versions and checksums in <code>luc.lock</code>:</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc add owner/name</code></pre></div>\n<p>Install an application. It is built from source on your machine:</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc install owner/name</code></pre></div>\n<p><code>luc</code> comes with the <a href=\"https://luce.luciaos.com\">Luce installer</a>.</p>\n<h2 id=\"publishing\">Publishing<a class=\"anchor\" href=\"#publishing\" aria-label=\"link to this section\">#</a></h2>\n<p>Package authors publish a version from their project with release notes. Every release keeps its source, which you can browse here or clone with Git:</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc publish -m \"What changed in this version\"</code></pre></div>\n<p>Publishing accounts are by invitation for now.</p>\n")
     try foot(out)
 
