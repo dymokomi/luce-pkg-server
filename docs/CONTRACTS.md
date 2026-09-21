@@ -11,6 +11,29 @@ substitution. These are application-crypto choices, not changes to HTTP/TLS.
 The replacement Prism-backed authority does not by itself implement the complete
 account-key/vault contract below; integration and verification remain required.
 
+## Visibility and accounts
+
+Owner decision, September 21, 2026:
+
+- Every repository, package and release on `pkg.luciaos.com` is **public**. There
+  is no private package, no visibility flag and no per-reader ACL.
+- Browsing, search, Git clone/fetch, version listing, release download and
+  `luc` installation require **no account and no credential**.
+- An account is required only for operations that change state: repository
+  creation, Git push, pull-request creation and state changes, signing-key
+  enrollment and release publication. Registration stays invite-only.
+- `dymokomi` is the only account for now. Collaborator roles remain later work.
+- A release is a pushed tag `v<major.minor.patch>` whose commit carries a root
+  `package.prisma` naming this owner, this repository and this version. The
+  registry publishes it as static files (a history-free Git pack, the package
+  definition, a per-package `versions` listing with SHA-256 digests, and a global
+  `index`). Released tags cannot be moved or deleted.
+- Integrity is the SHA-256 recorded in `luc.lock` plus HTTPS. Publisher
+  signatures, signing-key enrollment and the separate publish protocol are
+  dropped; they may return later as an additional file without changing this model.
+- Nothing has been released and there is one user, so no format, command or
+  protocol is kept for backward compatibility. Old ones are replaced outright.
+
 ## Package documents, recipes and locks
 
 - The authored package definition is **`package.prisma`**, schema

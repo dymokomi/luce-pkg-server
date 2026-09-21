@@ -20,6 +20,9 @@ for required in ('pkg.luciaos.com', 'max_size 65MiB', 'Cache-Control "no-store"'
                  'Strict-Transport-Security', 'response_header_timeout 5m'):
     assert required in caddy
 assert 'encode ' not in caddy and 'basic_auth' not in caddy
+for required in ('root * /var/lib/luce-pkg-site', 'file_server', 'immutable', '@registry path /git/* /v1/* /health'):
+    assert required in caddy
+assert 'ReadWritePaths=/var/lib/luce-pkg-server /var/lib/luce-pkg-site' in service and 'UMask=0027' in service
 for script in ('backup.sh', 'restore.sh'):
     subprocess.run(['bash', '-n', ROOT / 'deploy' / script], check=True)
 subprocess.run(['bash', '-n', ROOT / 'deploy' / 'build-release.sh'], check=True)

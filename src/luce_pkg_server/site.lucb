@@ -1,0 +1,166 @@
+## Static public registry files, served directly by the HTTPS proxy:
+##   <site>/index                         one line per package: owner/name TAB latest TAB description
+##   <site>/<owner>/<name>/versions       one line per release: version SP sha256 SP commit
+##   <site>/<owner>/<name>/<version>.pack     Git pack of the tagged commit and its tree
+##   <site>/<owner>/<name>/<version>.prisma   that commit's package.prisma
+## Release files are immutable. Everything here is derived from repository state.
+import c
+import files
+import memory
+import paths
+import strings
+import pkg
+import prism
+
+let max_listing: usize = 4194304
+
+func terminated(path: str) -> str!:
+    return try strings.copy(path)
+
+func ensure_directory(path: str) -> !:
+    let name = try terminated(path)
+    defer strings.release(name)
+    if not files.exists((c.str)name): try files.create_directory((c.str)name)
+
+func same(left: const u8[], right: const u8[]) -> bool:
+    if left.length != right.length: return false
+    for i in 0..<left.length:
+        if left[i] != right[i]: return false
+    return true
+
+## Publish bytes once. An identical existing file is accepted; a different one is refused.
+func immutable(path: str, bytes: const u8[]) -> !:
+    let name = try terminated(path)
+    defer strings.release(name)
+    if files.exists((c.str)name):
+        let current = try files.read_limit((c.str)name, bytes.length + 1)
+        defer free(current) in memory.heap
+        if not same(current, bytes): error(prism.invalid, "release: this version already exists with different content")
+        return
+    try files.write_atomic((c.str)name, bytes, synchronize = true)
+
+func package_directory(site: str, owner: str, name: str) -> str!:
+    let parent = try paths.join(site, owner)
+    defer strings.release(parent)
+    try ensure_directory(site)
+    try ensure_directory(parent)
+    let directory = try paths.join(parent, name)
+    errdefer strings.release(directory)
+    try ensure_directory(directory)
+    return directory
+
+func member(directory: str, version: str, suffix: str) -> str!:
+    var buffer: u8[96]
+    return try paths.join(directory, try format(buffer, f"{version}{suffix}"))
+
+## Step one, before the tag ref is committed: the immutable release files.
+pub func publish_files(site: str, owner: str, name: str, version: str, pack: const u8[], definition: const u8[]) -> !:
+    let directory = try package_directory(site, owner, name)
+    defer strings.release(directory)
+    let pack_path = try member(directory, version, ".pack")
+    defer strings.release(pack_path)
+    try immutable(pack_path, pack)
+    let definition_path = try member(directory, version, ".prisma")
+    defer strings.release(definition_path)
+    try immutable(definition_path, definition)
+
+func read_listing(path: str) -> u8[]!:
+    let name = try terminated(path)
+    defer strings.release(name)
+    if not files.exists((c.str)name):
+        var empty: u8[]
+        return empty
+    return try files.read_limit((c.str)name, max_listing)
+
+func discard_listing(bytes: u8[]):
+    if bytes.length > 0: free(bytes) in memory.heap
+
+func newer(left: pkg.Version, right: pkg.Version) -> bool:
+    if left.major != right.major: return left.major > right.major
+    if left.minor != right.minor: return left.minor > right.minor
+    return left.patch > right.patch
+
+struct Text:
+    var bytes: u8[]
+    var used: usize
+
+    mutating func put(text: str) -> !:
+        if self.used + text.length > self.bytes.length: error(prism.invalid, "registry listing exceeds its bound")
+        for i in 0..<text.length: self.bytes[self.used + i] = text.bytes[i]
+        self.used += text.length
+
+## Step two, after the tag ref is committed: make the release discoverable.
+pub func publish_listing(site: str, owner: str, name: str, version: str, pack: const u8[], commit: str, description: str) -> !:
+    var digest: u8[32]
+    discard(try pkg.source_digest(pack, digest))
+    var digest_text: u8[64]
+    let digits = "0123456789abcdef"
+    for i in 0..<(usize)32:
+        digest_text[i * 2] = digits.bytes[(usize)(digest[i] >> 4)]
+        digest_text[i * 2 + 1] = digits.bytes[(usize)(digest[i] & 15)]
+
+    let directory = try package_directory(site, owner, name)
+    defer strings.release(directory)
+    let versions_path = try paths.join(directory, "versions")
+    defer strings.release(versions_path)
+    let current = try read_listing(versions_path)
+    defer discard_listing(current)
+    let buffer = try alloc u8[max_listing] in memory.heap
+    defer free(buffer) in memory.heap
+    var output = Text(bytes = buffer)
+    var latest = try pkg.parse_version(version)
+    var latest_text = version
+    var present = false
+    var start: usize
+    for end in 0..<current.length:
+        if current[end] != '\n': continue
+        let line = (str)current[start..<end]
+        start = end + 1
+        var space = line.length
+        for i in 0..<line.length:
+            if line.bytes[i] == ' ':
+                space = i
+                break
+        let listed = (str)line.bytes[..<space]
+        if listed == version: present = true
+        let parsed = pkg.parse_version(listed) catch: continue
+        if newer(parsed, latest):
+            latest = parsed
+            latest_text = listed
+        try output.put(line)
+        try output.put("\n")
+    if not present:
+        try output.put(version)
+        try output.put(" ")
+        try output.put((str)digest_text[0..])
+        try output.put(" ")
+        try output.put(commit)
+        try output.put("\n")
+        let name_z = try terminated(versions_path)
+        defer strings.release(name_z)
+        try files.write_atomic((c.str)name_z, buffer[..<output.used], synchronize = true)
+
+    var coordinate_buffer: u8[160]
+    let coordinate = try format(coordinate_buffer, f"{owner}/{name}")
+    let index_path = try paths.join(site, "index")
+    defer strings.release(index_path)
+    let index = try read_listing(index_path)
+    defer discard_listing(index)
+    var listing = Text(bytes = buffer)
+    start = 0
+    for end in 0..<index.length:
+        if index[end] != '\n': continue
+        let line = (str)index[start..<end]
+        start = end + 1
+        if line.length > coordinate.length and strings.starts_with(line, coordinate) and line.bytes[coordinate.length] == '\t': continue
+        try listing.put(line)
+        try listing.put("\n")
+    try listing.put(coordinate)
+    try listing.put("\t")
+    try listing.put(latest_text)
+    try listing.put("\t")
+    try listing.put(description)
+    try listing.put("\n")
+    let index_z = try terminated(index_path)
+    defer strings.release(index_z)
+    try files.write_atomic((c.str)index_z, buffer[..<listing.used], synchronize = true)

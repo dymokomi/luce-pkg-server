@@ -139,6 +139,9 @@ struct App:
     var authority: interop.Reference[auth.Authority]
     var origin: u8[255]
     var origin_size: usize = 0
+    ## Directory of static public release files; empty disables tag releases.
+    var site: u8[255]
+    var site_size: usize = 0
 
     mutating func close():
         self.authority.release()
@@ -564,9 +567,18 @@ struct App:
         let output = alloc u8[270336] in memory.heap catch: return reply("internal error", 500)
         defer free(output) in memory.heap
         var accepted = true
-        discard(repositories.receive_pack(self.database.value(), principal, owner, name, wire) catch:
+        # Release-rule failures are reported to the pusher; anything else stays generic.
+        var reason_buffer: u8[160]
+        var reason_size: usize = 0
+        discard(repositories.receive_pack(self.database.value(), principal, owner, name, wire, (str)self.site[..<self.site_size]) catch failure:
             accepted = false
+            let explained = failure.message if strings.starts_with(failure.message, "release: ") else ""
+            for byte in explained.bytes:
+                if reason_size == reason_buffer.length: break
+                reason_buffer[reason_size] = byte if byte >= 0x20 and byte < 0x7f else ' '
+                reason_size += 1
             recover 0)
+        let reason = (str)reason_buffer[..<reason_size] if reason_size > 0 else "transaction rejected"
         if not report:
             if not accepted: return reply("push rejected", 409)
             return binary_reply(b"", "application/x-git-receive-pack-result")
@@ -574,7 +586,7 @@ struct App:
         for i in 0..<commands.count:
             let command = commands.at(i) catch: return reply("invalid push", 400)
             var line: u8[4352]
-            let text = format(line, f"ok {command.name}\n" if accepted else f"ng {command.name} transaction rejected\n") catch: return reply("internal error", 500)
+            let text = format(line, f"ok {command.name}\n" if accepted else f"ng {command.name} {reason}\n") catch: return reply("internal error", 500)
             used += git.encode_packet(git.PacketKind.data, text.bytes, output[used..]) catch: return reply("internal error", 500)
         used += git.encode_packet(git.PacketKind.flush, b"", output[used..]) catch: return reply("internal error", 500)
         return binary_reply(output[..<used], "application/x-git-receive-pack-result")
@@ -593,6 +605,12 @@ func configured_origin() -> str!:
         if byte < 33 or byte > 126: error(auth.invalid, "invalid registry origin")
     return origin
 
+func configured_site() -> str!:
+    let site = os.env((c.str)"LUCE_REGISTRY_SITE") else ""
+    if site.length > 255: error(auth.invalid, "registry site path exceeds 255 bytes")
+    if site.length > 0 and site.bytes[0] != '/': error(auth.invalid, "registry site path must be absolute")
+    return site
+
 func configure(socket: str) -> interop.Outcome[http.Application]:
     let database = db.Database.connect(socket, store_token() catch failure: trap(failure.message)) catch failure: trap(failure.message)
     let authority = auth.Authority.attach(database.value().store() catch failure: trap(failure.message)) catch failure:
@@ -606,6 +624,10 @@ func configure(socket: str) -> interop.Outcome[http.Application]:
     for i in 0..<origin.length:
         native.origin[i] = origin.bytes[i]
     native.origin_size = origin.length
+    let site = configured_site() catch failure: trap(failure.message)
+    for i in 0..<site.length:
+        native.site[i] = site.bytes[i]
+    native.site_size = site.length
     let app = interop.Reference[App].adopt(native, app_type) catch failure: trap(failure.message)
     defer app.release()
     var router = http.Router() catch failure: trap(failure.message)

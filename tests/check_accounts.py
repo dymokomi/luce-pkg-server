@@ -53,7 +53,7 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
         probe.bind(('127.0.0.1', 0))
         port = probe.getsockname()[1]
     env = dict(os.environ, LUCE_REGISTRY_STORE_TOKEN='integration-store-token',
-               LUCE_REGISTRY_ORIGIN=key_http.ORIGIN)
+               LUCE_REGISTRY_ORIGIN=key_http.ORIGIN, LUCE_REGISTRY_SITE=str(root / 'site'))
     with (root / 'server.log').open('w+') as log:
         process = subprocess.Popen([str(binary), str(database), str(port)], env=env,
                                    stdout=log, stderr=subprocess.STDOUT)

@@ -12,6 +12,7 @@ import pkg
 import time
 import utf8
 import luce_pkg_server.release_pack as release_pack
+import luce_pkg_server.site as site
 
 pub let max_object_bytes: usize = 67108864
 pub let chunk_bytes: usize = 1048576
@@ -562,6 +563,98 @@ pub func get_release(database: db.Database*, principal: str, owner: str, name: s
     if part == "signature": return try bytes_value(signature.value().bytes())
     return try bytes_value(key.value().bytes())
 
+## `refs/tags/v<major.minor.patch>` names a release; any other tag is an ordinary tag.
+func release_version(ref_name: str) -> str:
+    let prefix = "refs/tags/v"
+    if not strings.starts_with(ref_name, prefix): return ""
+    let version = (str)ref_name.bytes[prefix.length..]
+    discard(pkg.parse_version(version) catch: return "")
+    return version
+
+pub let max_release_pack: usize = 67108864
+
+pub struct TagRelease:
+    pub var commit: u8[40]
+    pub var pack_size: usize
+    pub var definition_size: usize
+    pub var description: u8[256]
+    pub var description_size: usize
+
+## Build the public release of a version tag: a pack holding the tagged commit and its
+## complete tree (no history), plus that commit's package.prisma. The definition must
+## name this owner, this repository and this version.
+func tag_release(database: db.Database*, owner: str, name: str, target: const u8[], version: str,
+        pack: u8[], definition: u8[]) -> TagRelease!:
+    var path_buffer: u8[192]
+    let path = try repo_path(owner, owner, name, path_buffer)
+    let snapshot = try database.snapshot()
+    defer snapshot.release()
+    let session = snapshot.value()
+    var commit_id: u8[20]
+    var budget: usize = 1048576
+    discard(try peel(session, path, target, commit_id, &budget))
+    let commit_value = try checked_object(session, path, commit_id)
+    defer commit_value.release()
+    let commit_object = try git.decode_object(commit_value.value().bytes())
+    if commit_object.kind != "commit": error(prism.invalid, "release: a release tag must name a commit")
+    let commit = try git.decode_commit(commit_object.payload)
+    var tree_id: u8[20]
+    try git.decode_id(commit.tree, tree_id)
+
+    var result: TagRelease
+    discard(try git.hex_id(commit_id, result.commit))
+    let root_value = try checked_object(session, path, tree_id)
+    defer root_value.release()
+    let root = try git.decode_object(root_value.value().bytes())
+    var found = false
+    var at: usize = 0
+    while at < root.payload.length:
+        let entry = try git.decode_tree_entry(root.payload[at..])
+        at += entry.consumed
+        if entry.name != "package.prisma": continue
+        if entry.mode != "100644": error(prism.invalid, "release: package.prisma must be a regular file")
+        let blob_value = try checked_object(session, path, entry.id)
+        defer blob_value.release()
+        let blob = try git.decode_object(blob_value.value().bytes())
+        if blob.payload.length > definition.length: error(prism.invalid, "release: package.prisma is too large")
+        for i in 0..<blob.payload.length: definition[i] = blob.payload[i]
+        result.definition_size = blob.payload.length
+        found = true
+    if not found: error(prism.invalid, "release: a release needs package.prisma at the repository root")
+    var declared = try pkg.decode_package(definition[..<result.definition_size])
+    defer declared.close()
+    if declared.owner != owner or declared.name != name: error(prism.invalid, "release: package.prisma owner/name must match the repository")
+    if declared.version != version: error(prism.invalid, "release: package.prisma version must match the release tag")
+    for i in 0..<declared.description.length: result.description[i] = declared.description.bytes[i]
+    result.description_size = declared.description.length
+
+    let nodes = try alloc GraphNode[4096] in memory.heap
+    defer free(nodes) in memory.heap
+    let slots = try alloc usize[8192] in memory.heap
+    defer free(slots) in memory.heap
+    for i in 0..<slots.length: slots[i] = 0
+    var graph = Graph(nodes = nodes, slots = slots)
+    try graph.add(tree_id, 2)
+    try graph.validate(session, path)
+    let objects = try alloc git.Object[4097] in memory.heap
+    defer free(objects) in memory.heap
+    let leases = try alloc FetchLease[4096] in memory.heap
+    defer free(leases) in memory.heap
+    var count: usize = 0
+    defer release_fetch_leases(leases, &count)
+    objects[0] = commit_object
+    var total = commit_object.payload.length
+    for i in 0..<graph.count:
+        let value = try checked_object(session, path, graph.nodes[i].id)
+        leases[count] = FetchLease(value = value)
+        count += 1
+        let object = try git.decode_object(value.value().bytes())
+        if object.payload.length > max_release_pack - total: error(prism.invalid, "release: release source exceeds its size limit")
+        total += object.payload.length
+        objects[count] = object
+    result.pack_size = try git.encode_pack(objects[..<count + 1], pack)
+    return result
+
 func push_capabilities(capabilities: str) -> !:
     var start: usize = 0
     for i in 0..<capabilities.length + 1:
@@ -595,7 +688,7 @@ func pack_base(id: const u8[], context: void*?) -> git.Object?!:
 ## pack before staging objects, then atomically CAS-publishes graph-checked refs.
 ## Failed staging/ref publication may leave unreferenced immutable objects; retry
 ## and quota/GC policy belong to the caller. No fast-forward/signature policy yet.
-pub func receive_pack(database: db.Database*, principal: str, owner: str, name: str, input: const u8[]) -> usize!:
+pub func receive_pack(database: db.Database*, principal: str, owner: str, name: str, input: const u8[], site_root: str = "") -> usize!:
     var path_buffer: u8[192]
     let path = try repo_path(principal, owner, name, path_buffer)
     let snapshot = try database.snapshot()
@@ -633,7 +726,32 @@ pub func receive_pack(database: db.Database*, principal: str, owner: str, name: 
             if not same(actual, item.id): error(prism.invalid, "stored push object identity mismatch")
     else:
         snapshot.value().close()
+    # A version tag publishes a release. Released tags never move and are never deleted.
+    # Immutable files are written first, the refs commit, then the release is listed.
+    var releases: usize = 0
+    for i in 0..<request.count:
+        if release_version(updates[i].name).length == 0: continue
+        if not zero_id(updates[i].expected): error(prism.invalid, "release: a release tag cannot be moved or deleted")
+        if site_root.length == 0: error(prism.invalid, "release: release publication is not configured")
+        releases += 1
+    if releases == 0:
+        try update_refs(database, principal, owner, name, updates[..<request.count])
+        return request.count
+    let pack = try alloc u8[max_release_pack] in memory.heap
+    defer free(pack) in memory.heap
+    var definition: u8[65536]
+    for i in 0..<request.count:
+        let version = release_version(updates[i].name)
+        if version.length == 0: continue
+        let built = try tag_release(database, owner, name, updates[i].target, version, pack, definition)
+        try site.publish_files(site_root, owner, name, version, pack[..<built.pack_size], definition[..<built.definition_size])
     try update_refs(database, principal, owner, name, updates[..<request.count])
+    for i in 0..<request.count:
+        let version = release_version(updates[i].name)
+        if version.length == 0: continue
+        let built = try tag_release(database, owner, name, updates[i].target, version, pack, definition)
+        try site.publish_listing(site_root, owner, name, version, pack[..<built.pack_size],
+            (str)built.commit[0..], (str)built.description[..<built.description_size])
     return request.count
 
 pub let max_ref_name: usize = 1024

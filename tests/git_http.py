@@ -158,6 +158,38 @@ language = "luce-base"
     assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-upload-pack')[0] == 401
     assert request(port, 'POST', fetch_path, headers=headers)[0] == 415
     assert request(port, 'POST', fetch_path, headers={**headers, 'Content-Type': 'application/x-git-upload-pack-request'})[0] == 400
+    # A version tag publishes a static, history-free release; main is left untouched.
+    site = root / 'site' / 'testuser' / 'git-wire'
+    git('checkout', '-q', '-b', 'release-line')
+    (repo / 'package.prisma').write_text('#prisma 4.0\ndef package "git-wire" {\n    str owner = "testuser"\n'
+        '    str version = "1.3.0"\n    str language = "luce-base"\n    str description = "Release fixture"\n}\n')
+    git('add', 'package.prisma')
+    git('commit', '-qm', 'declare package 1.3.0')
+    released = git('rev-parse', 'HEAD').strip().decode()
+    git('push', 'origin', 'release-line')
+    git('tag', 'v9.9.9')
+    rejected = subprocess.run(['git', '-C', str(repo), 'push', 'origin', 'v9.9.9'], env=env, capture_output=True, timeout=90)
+    assert rejected.returncode != 0 and b'version must match the release tag' in rejected.stderr, rejected.stderr
+    assert not site.exists()
+    git('tag', 'v1.3.0')
+    git('push', 'origin', 'v1.3.0')
+    pack = (site / '1.3.0.pack').read_bytes()
+    assert (site / '1.3.0.prisma').read_bytes() == (repo / 'package.prisma').read_bytes()
+    assert (site / 'versions').read_text() == f'1.3.0 {hashlib.sha256(pack).hexdigest()} {released}\n'
+    assert (root / 'site' / 'index').read_text() == 'testuser/git-wire\t1.3.0\tRelease fixture\n'
+    unpacked = root / 'release-unpacked'
+    subprocess.run(['git', 'init', '-q', str(unpacked)], env=env, check=True, timeout=30)
+    subprocess.run(['git', '-C', str(unpacked), 'unpack-objects'], input=pack, env=env, check=True, capture_output=True, timeout=30)
+    listed = subprocess.check_output(['git', '-C', str(unpacked), 'ls-tree', '-r', '--name-only', released], env=env, timeout=30)
+    assert b'package.prisma' in listed.split() and b'large.txt' in listed.split()
+    parents = subprocess.check_output(['git', '-C', str(unpacked), 'cat-file', '-p', released], env=env, timeout=30)
+    missing = subprocess.run(['git', '-C', str(unpacked), 'cat-file', '-e', parents.split(b'parent ')[1][:40].decode()], env=env, capture_output=True, timeout=30)
+    assert missing.returncode != 0, 'a release pack carries no history'
+    for refusal in (('push', '--force', 'origin', 'main:refs/tags/v1.3.0'), ('push', 'origin', ':refs/tags/v1.3.0')):
+        refused = subprocess.run(['git', '-C', str(repo), *refusal], env=env, capture_output=True, timeout=90)
+        assert refused.returncode != 0 and b'cannot be moved or deleted' in refused.stderr, refused.stderr
+    git('checkout', '-q', 'main')
+    print('PASS version tag publishes an immutable static release; mismatched, moved and deleted tags are refused', flush=True)
     print('PASS stock Git clone, default main HEAD, incremental fetch, annotated tags and strict fsck', flush=True)
     print('PASS stock Git HTTP initial/incremental push, sorted discovery, atomic refs, deletion and failure report', flush=True)
     return latest

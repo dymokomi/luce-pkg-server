@@ -23,30 +23,58 @@ Create `/etc/luce-pkg-server/environment` as root, mode `0600`, containing exact
 ```text
 LUCE_REGISTRY_STORE_TOKEN=<64 lowercase hex characters from luce-pkg-admin token>
 LUCE_REGISTRY_ORIGIN=https://pkg.luciaos.com
+LUCE_REGISTRY_SITE=/var/lib/luce-pkg-site
 ```
+
+`LUCE_REGISTRY_SITE` is the directory of public release files. Pushing a tag
+`v<major.minor.patch>` makes the registry write `<owner>/<name>/<version>.pack`,
+`<version>.prisma`, the package's `versions` listing and the global `index` there,
+and Caddy serves them as static files without involving the registry. Create it
+once so Caddy can read what the service writes:
+
+```sh
+sudo install -d -o luce-pkg -g caddy -m 2750 /var/lib/luce-pkg-site
+```
+
+The setgid bit gives new files the `caddy` group, and the unit's `UMask=0027`
+makes them group-readable. The database directory stays `0700`, so the wider
+umask exposes nothing there. Back this directory up together with the database:
+it is derived from repository state, but there is no command yet that rebuilds it,
+and re-pushing an existing tag is a no-op for Git.
 
 Never place the token in an argument, repository, log, backup directory, or Caddy
 configuration. Initialize once while the service is stopped:
 
 ```sh
-sudo -u luce-pkg env -i PATH=/usr/bin:/opt/luce-pkg-server/current \
-  bash -c 'set -a; source /etc/luce-pkg-server/environment; set +a; \
-  exec luce-pkg-admin init /var/lib/luce-pkg-server/registry.db'
+sudo bash -c 'set -a; source /etc/luce-pkg-server/environment; set +a; \
+  exec setpriv --reuid luce-pkg --regid luce-pkg --clear-groups \
+  env -i PATH=/usr/bin LUCE_REGISTRY_STORE_TOKEN="$LUCE_REGISTRY_STORE_TOKEN" \
+  LUCE_REGISTRY_ORIGIN="$LUCE_REGISTRY_ORIGIN" \
+  /opt/luce-pkg-server/current/luce-pkg-admin init /var/lib/luce-pkg-server/registry.db'
 ```
+
+The environment file is root-only, so the service user cannot `source` it. Root
+reads it and then drops to `luce-pkg` with `setpriv`; the token travels only in
+the environment and never in an argument.
 
 After `systemctl enable --now luce-pkg-server`, issue an invitation through the
 private owner socket. The command prints the secret once; deliver it through a
 protected channel and do not log it:
 
 ```sh
-sudo -u luce-pkg env -i PATH=/usr/bin:/opt/luce-pkg-server/current \
-  bash -c 'set -a; source /etc/luce-pkg-server/environment; set +a; \
-  exec luce-pkg-admin invite /var/lib/luce-pkg-server/registry.db.sock'
+sudo bash -c 'set -a; source /etc/luce-pkg-server/environment; set +a; \
+  exec setpriv --reuid luce-pkg --regid luce-pkg --clear-groups \
+  env -i PATH=/usr/bin LUCE_REGISTRY_STORE_TOKEN="$LUCE_REGISTRY_STORE_TOKEN" \
+  LUCE_REGISTRY_ORIGIN="$LUCE_REGISTRY_ORIGIN" \
+  /opt/luce-pkg-server/current/luce-pkg-admin invite /var/lib/luce-pkg-server/registry.db.sock'
 ```
 
 Append the reviewed `Caddyfile` block only after the loopback health check passes.
-Validate the complete Caddy configuration before reload. DNS is one Route53 A
-record for `pkg.luciaos.com` to the existing static VPS address.
+Validate the complete Caddy configuration before reload, as the `caddy` user
+(`sudo -u caddy caddy validate ...`): validation opens the access log, and a
+root-owned log file makes the following reload fail. DNS is one Route53 A record
+for `pkg.luciaos.com` to the static address of the dedicated registry VPS; the
+registry does not share a host with other sites.
 The installed Caddy 2.11 build does not accept site-local request `timeouts`;
 the backend therefore enforces explicit 15-second idle and five-minute
 request/response/application deadlines, while Caddy enforces the body cap plus

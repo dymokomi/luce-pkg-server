@@ -1,22 +1,39 @@
 pkg.luciaos.com {
-	request_body {
-		max_size 65MiB
-	}
 	header {
 		Strict-Transport-Security "max-age=31536000; includeSubDomains"
 		X-Content-Type-Options "nosniff"
 		X-Frame-Options "DENY"
 		Referrer-Policy "no-referrer"
-		Cache-Control "no-store"
 		-Server
 	}
-	reverse_proxy 127.0.0.1:9420 {
-		header_up Host 127.0.0.1:9420
-		transport http {
-			dial_timeout 5s
-			response_header_timeout 5m
+
+	# Accounts, Git and health go to the registry. Nothing here is cached.
+	@registry path /git/* /v1/* /health
+	handle @registry {
+		request_body {
+			max_size 65MiB
+		}
+		header Cache-Control "no-store"
+		reverse_proxy 127.0.0.1:9420 {
+			header_up Host 127.0.0.1:9420
+			transport http {
+				dial_timeout 5s
+				response_header_timeout 5m
+			}
 		}
 	}
+
+	# Everything else is the public, anonymous registry: static files the
+	# registry wrote when a version tag was pushed. Releases never change.
+	handle {
+		root * /var/lib/luce-pkg-site
+		@release path_regexp \.(pack|prisma)$
+		header @release Cache-Control "public, max-age=31536000, immutable"
+		@listing not path_regexp \.(pack|prisma)$
+		header @listing Cache-Control "public, max-age=60"
+		file_server
+	}
+
 	log {
 		output file /var/log/caddy/luce-pkg-server.log {
 			roll_size 20MiB
