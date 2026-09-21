@@ -246,7 +246,10 @@ func existing_object(database: db.Database*, path: str, location: str, principal
 ## Store one canonical uncompressed loose-object envelope. Content-addressed,
 ## idempotent only for byte-identical content. Writes id only after success.
 ## SHA-1 is Git identity, NOT collision-attack detection or release authenticity.
-pub func put_object(database: db.Database*, principal: str, owner: str, name: str, wire: const u8[], id: u8[]) -> !:
+## A commit is durable on its own: it is one write-ahead-log transaction. A bake folds the
+## log into a full snapshot of the store, so it costs time proportional to the whole
+## database. A caller storing many objects passes `bake = false` and bakes once itself.
+pub func put_object(database: db.Database*, principal: str, owner: str, name: str, wire: const u8[], id: u8[], bake: bool = true) -> !:
     var path_buffer: u8[192]
     let path = try repo_path(principal, owner, name, path_buffer)
     if wire.length > max_object_bytes or id.length != 20:
@@ -257,7 +260,7 @@ pub func put_object(database: db.Database*, principal: str, owner: str, name: st
     var object_buffer: u8[256]
     let location = try object_path(path, digest, object_buffer)
     if try existing_object(database, path, location, principal, wire):
-        discard(try database.bake(wait_ms = 1000))
+        if bake: discard(try database.bake(wait_ms = 1000))
         for i in 0..<(usize)20: id[i] = digest[i]
         return
     var key: u8[64]
@@ -286,9 +289,8 @@ pub func put_object(database: db.Database*, principal: str, owner: str, name: st
             try tx.value().set(location, "size", size)
             try tx.value().set(location, "chunks", chunks)
         discard(try tx.value().commit(wait_ms = 1000))
-    # Also bake idempotent retries: a previous commit may have succeeded before
-    # its bake failed. Never report success without a completed durability barrier.
-    discard(try database.bake(wait_ms = 1000))
+    # Also bake idempotent retries: a previous commit may have succeeded before its bake failed.
+    if bake: discard(try database.bake(wait_ms = 1000))
     for i in 0..<(usize)20: id[i] = digest[i]
 
 ## Returns an owning byte-array value; caller releases it. Validate persisted
@@ -823,6 +825,7 @@ pub func receive_pack(database: db.Database*, principal: str, owner: str, name: 
         defer pack.close()
         bases.close()
         snapshot.value().close()
+        var unbaked: usize = 0
         # Validate every packed object's structure, even if no requested ref uses it.
         for item in pack.items:
             if item.kind == "tree": discard(try git.validate_tree(item.payload))
@@ -833,8 +836,15 @@ pub func receive_pack(database: db.Database*, principal: str, owner: str, name: 
             defer free(wire) in memory.heap
             let count = try git.encode_object(item.kind, item.payload, wire)
             var actual: u8[20]
-            try put_object(database, principal, owner, name, wire[..<count], actual)
+            try put_object(database, principal, owner, name, wire[..<count], actual, bake = false)
             if not same(actual, item.id): error(prism.invalid, "stored push object identity mismatch")
+            # Baking per object made a push quadratic in the size of the registry. Fold the
+            # log every 8 MiB so a large push keeps a bounded unbaked tail, and once at the end.
+            unbaked += count
+            if unbaked >= 8388608:
+                try bake_committed(database)
+                unbaked = 0
+        try bake_committed(database)
     else:
         snapshot.value().close()
     # A version tag publishes a release. Released tags never move and are never deleted.

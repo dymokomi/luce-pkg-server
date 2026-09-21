@@ -565,6 +565,9 @@ struct App:
         let body = request.body() catch: return reply("invalid body", 400)
         defer body.release()
         let wire = body.value().bytes((i64)repositories.max_object_bytes) catch: return reply("invalid body", 400)
+        # Before a push larger than its buffer, Git sends a lone flush packet to check that
+        # it is authorized. It already is by this point; answer with an empty result.
+        if wire.length == 4 and (str)wire == "0000": return binary_reply(b"", "application/x-git-receive-pack-result")
         let commands = git.decode_push(wire) catch: return reply("invalid push request", 400)
         var report = false
         var start: usize = 0
