@@ -39,7 +39,8 @@ pub struct Page:
 pub func page(buffer: u8[]) -> Page:
     return Page(bytes = buffer)
 
-func head(out: Page*, title: str, description: str, root: str) -> !:
+## `active` is "applications", "tools", "packages" or empty, and marks that tab.
+func head(out: Page*, title: str, description: str, root: str, active: str = "") -> !:
     try out.put("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>")
     try out.escaped(title)
     try out.put("</title>\n<meta name=\"description\" content=\"")
@@ -60,9 +61,14 @@ func head(out: Page*, title: str, description: str, root: str) -> !:
     try out.put(root)
     try out.put("assets/packages.js\" defer></script>\n</head>\n<body>\n<a class=\"skip\" href=\"#content\">Skip to content</a>\n<header class=\"top\">\n<a class=\"mark\" href=\"")
     try out.put(root)
-    try out.put("\">Luce packages</a>\n<nav class=\"tabs\">\n<a class=\"here\" href=\"")
-    try out.put(root)
-    try out.put("\">Packages</a>\n</nav>\n<div class=\"tools\">\n<a class=\"cross\" href=\"https://luce.luciaos.com\">Luce</a><a class=\"cross\" href=\"https://luce-base.luciaos.com\">Luce Base</a><a class=\"cross\" href=\"https://luciaos.com\">LuciaOS</a>\n<button id=\"theme\" type=\"button\" aria-label=\"Switch between light and dark\">&#9681;</button>\n</div>\n</header>\n<div class=\"shell\">\n")
+    try out.put("\">Luce packages</a>\n<nav class=\"tabs\">\n<a ")
+    if active == "applications": try out.put("class=\"here\" ")
+    try out.put("href=\"/applications/\">Applications</a>\n<a ")
+    if active == "tools": try out.put("class=\"here\" ")
+    try out.put("href=\"/tools/\">Tools</a>\n<a ")
+    if active == "packages": try out.put("class=\"here\" ")
+    try out.put("href=\"/packages/\">Packages</a>\n")
+    try out.put("</nav>\n<div class=\"tools\">\n<a class=\"cross\" href=\"https://luce.luciaos.com\">Luce</a><a class=\"cross\" href=\"https://luce-base.luciaos.com\">Luce Base</a><a class=\"cross\" href=\"https://luciaos.com\">LuciaOS</a>\n<button id=\"theme\" type=\"button\" aria-label=\"Switch between light and dark\">&#9681;</button>\n</div>\n</header>\n<div class=\"shell\">\n")
 
 func foot(out: Page*) -> !:
     try out.put("</article>\n</main>\n</div>\n</body>\n</html>\n")
@@ -79,47 +85,97 @@ func field(line: str, separator: u8, index: usize) -> str:
 
 ## The front page, after pypi.org: what you do here, search first, the packages, then
 ## a plain definition and how to install and publish. `listing` is the site's `index` file.
-pub func index_page(out: Page*, listing: const u8[]) -> !:
-    try head(out, "Luce Package Index", "Find, install and publish packages for Luce and Luce Base.", "/")
-    # An index line is: owner/name TAB latest TAB description TAB kind.
-    var applications: usize
-    var libraries: usize
+## The three kinds of thing the index holds, in the order the site shows them.
+let kinds: str[3] = ["application", "tool", "package"]
+let kind_titles: str[3] = ["Applications", "Tools", "Packages"]
+let kind_pages: str[3] = ["applications", "tools", "packages"]
+let kind_notes: str[3] = ["Desktop programs you install and open: <code>luc install owner/name</code>",
+    "Command-line programs you install and run in a terminal: <code>luc install owner/name</code>",
+    "Libraries you build on in your own project: <code>luc add owner/name</code>"]
+
+## The kind recorded on an index line; a line from before kinds existed is a package.
+func kind_of(line: str) -> usize:
+    let value = field(line, '\t', 3)
+    if value == "application": return 0
+    if value == "tool": return 1
+    return 2
+
+func plural(out: Page*, count: usize, index: usize) -> !:
+    var number: u8[32]
+    try out.put(try format(number, f"{count} "))
+    let singular: str[3] = ["application", "tool", "package"]
+    try out.put(singular[index])
+    if count != 1: try out.put("s")
+
+## The front page, after pypi.org: what you do here, search first, then everything by
+## kind, then a plain definition and how to install and publish. `listing` is the site's
+## `index` file: owner/name TAB latest TAB description TAB kind. `view` is empty for the
+## front page, or "applications" / "tools" / "packages" for the page of one kind.
+pub func index_page(out: Page*, listing: const u8[], view: str = "") -> !:
+    var only: usize = 3
+    for i in 0..<(usize)3:
+        if view == kind_pages[i]: only = i
+    let heading = kind_titles[only] if only < 3 else "Find, install and publish Luce packages"
+    try head(out, heading if only < 3 else "Luce Package Index", "Find, install and publish applications, tools and packages for Luce and Luce Base.", "/", view)
+    var counts: usize[3]
     var start: usize
     for end in 0..<listing.length:
         if listing[end] != '\n': continue
         let line = (str)listing[start..<end]
         start = end + 1
-        if field(line, '\t', 0).length == 0: continue
-        if field(line, '\t', 3) == "application": applications += 1
-        else: libraries += 1
-    try out.put("<div class=\"side\">\n<details class=\"nav\" open>\n<summary>Pages</summary>\n<ul>\n<li><a class=\"here\" href=\"/\">Packages</a></li>\n</ul>\n</details>\n<details class=\"nav\" open>\n<summary>On this page</summary>\n<ul>\n")
-    if applications > 0: try out.put("<li class=\"h2\"><a href=\"#applications\">Applications</a></li>")
-    if libraries > 0: try out.put("<li class=\"h2\"><a href=\"#libraries\">Libraries</a></li>")
-    try out.put("<li class=\"h2\"><a href=\"#installing\">Installing</a></li><li class=\"h2\"><a href=\"#publishing\">Publishing</a></li>\n</ul>\n</details>\n</div>\n<main id=\"content\">\n<article>\n<h1>Find, install and publish Luce packages</h1>\n<div class=\"find\"><input id=\"filter\" type=\"search\" placeholder=\"Search applications and libraries\" aria-label=\"Search applications and libraries\" autocomplete=\"off\"></div>\n<p class=\"count\">")
-    var number: u8[32]
-    try out.put(try format(number, f"{applications}"))
-    try out.put(" application" if applications == 1 else " applications")
-    try out.put(" &middot; ")
-    try out.put(try format(number, f"{libraries}"))
-    try out.put(" library" if libraries == 1 else " libraries")
+        if field(line, '\t', 0).length > 0: counts[kind_of(line)] += 1
+    try out.put("<div class=\"side\">\n<details class=\"nav\" open>\n<summary>Pages</summary>\n<ul>\n<li><a ")
+    if only == 3: try out.put("class=\"here\" ")
+    try out.put("href=\"/\">Everything</a></li>\n")
+    for i in 0..<(usize)3:
+        try out.put("<li><a ")
+        if only == i: try out.put("class=\"here\" ")
+        try out.put("href=\"/")
+        try out.put(kind_pages[i])
+        try out.put("/\">")
+        try out.put(kind_titles[i])
+        try out.put("</a></li>\n")
+    try out.put("</ul>\n</details>\n")
+    if only == 3:
+        try out.put("<details class=\"nav\" open>\n<summary>On this page</summary>\n<ul>\n")
+        for i in 0..<(usize)3:
+            if counts[i] == 0: continue
+            try out.put("<li class=\"h2\"><a href=\"#")
+            try out.put(kind_pages[i])
+            try out.put("\">")
+            try out.put(kind_titles[i])
+            try out.put("</a></li>")
+        try out.put("<li class=\"h2\"><a href=\"#installing\">Installing</a></li><li class=\"h2\"><a href=\"#publishing\">Publishing</a></li>\n</ul>\n</details>\n")
+    try out.put("</div>\n<main id=\"content\">\n<article>\n<h1>")
+    try out.put(heading)
+    try out.put("</h1>\n<div class=\"find\"><input id=\"filter\" type=\"search\" placeholder=\"Search ")
+    try out.put(kind_pages[only] if only < 3 else "applications, tools and packages")
+    try out.put("\" aria-label=\"Search\" autocomplete=\"off\"></div>\n<p class=\"count\">")
+    var written = false
+    for i in 0..<(usize)3:
+        if only < 3 and only != i: continue
+        if written: try out.put(" &middot; ")
+        try plural(out, counts[i], i)
+        written = true
     try out.put("</p>\n<p id=\"no-results\" hidden>Nothing matches that search.</p>\n")
-    # Applications first: they are what most visitors come to install.
-    for round in 0..<(usize)2:
-        let wanted = "application" if round == 0 else "library"
-        if (applications if round == 0 else libraries) == 0: continue
-        if round == 0:
-            try out.put("<section class=\"kind\" id=\"applications\">\n<h2>Applications<a class=\"anchor\" href=\"#applications\" aria-label=\"link to this section\">#</a></h2>\n<p class=\"kind-note\">Programs you install and run: <code>luc install owner/name</code></p>\n<div class=\"cards\">\n")
-        else:
-            try out.put("<section class=\"kind\" id=\"libraries\">\n<h2>Libraries<a class=\"anchor\" href=\"#libraries\" aria-label=\"link to this section\">#</a></h2>\n<p class=\"kind-note\">Code you build on in your own project: <code>luc add owner/name</code></p>\n<div class=\"cards\">\n")
+    for i in 0..<(usize)3:
+        if counts[i] == 0 or (only < 3 and only != i): continue
+        try out.put("<section class=\"kind\" id=\"")
+        try out.put(kind_pages[i])
+        try out.put("\">\n<h2>")
+        try out.put(kind_titles[i])
+        try out.put("<a class=\"anchor\" href=\"#")
+        try out.put(kind_pages[i])
+        try out.put("\" aria-label=\"link to this section\">#</a></h2>\n<p class=\"kind-note\">")
+        try out.put(kind_notes[i])
+        try out.put("</p>\n<div class=\"cards\">\n")
         start = 0
         for end in 0..<listing.length:
             if listing[end] != '\n': continue
             let line = (str)listing[start..<end]
             start = end + 1
             let coordinate = field(line, '\t', 0)
-            if coordinate.length == 0: continue
-            let kind = "application" if field(line, '\t', 3) == "application" else "library"
-            if kind != wanted: continue
+            if coordinate.length == 0 or kind_of(line) != i: continue
             try out.put("<a class=\"card\" href=\"/")
             try out.escaped(coordinate)
             try out.put("/\"><strong>")
@@ -132,7 +188,10 @@ pub func index_page(out: Page*, listing: const u8[]) -> !:
             try out.escaped(field(line, '\t', 1))
             try out.put("</span></a>\n")
         try out.put("</div>\n</section>\n")
-    try out.put("<p>The Luce Package Index is a repository of libraries and applications for the <a href=\"https://luce.luciaos.com\">Luce</a> and <a href=\"https://luce-base.luciaos.com\">Luce Base</a> programming languages.</p>\n<h2 id=\"installing\">Installing<a class=\"anchor\" href=\"#installing\" aria-label=\"link to this section\">#</a></h2>\n<p>Add a library to your project. <code>luc</code> resolves its dependencies and records exact versions and checksums in <code>luc.lock</code>:</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc add owner/name</code></pre></div>\n<p>Install an application. It is built from source on your machine:</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc install owner/name</code></pre></div>\n<p><code>luc</code> comes with the <a href=\"https://luce.luciaos.com\">Luce installer</a>.</p>\n<h2 id=\"publishing\">Publishing<a class=\"anchor\" href=\"#publishing\" aria-label=\"link to this section\">#</a></h2>\n<p>Package authors publish a version from their project with release notes. Every release keeps its source, which you can browse here or clone with Git:</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc publish -m \"What changed in this version\"</code></pre></div>\n<p>Publishing accounts are by invitation for now.</p>\n")
+    if only < 3:
+        try foot(out)
+        return
+    try out.put("<p>The Luce Package Index is a repository of applications, tools and packages for the <a href=\"https://luce.luciaos.com\">Luce</a> and <a href=\"https://luce-base.luciaos.com\">Luce Base</a> programming languages.</p>\n<h2 id=\"installing\">Installing<a class=\"anchor\" href=\"#installing\" aria-label=\"link to this section\">#</a></h2>\n<p>Install an application or a tool. It is built from source on your machine:</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc install owner/name</code></pre></div>\n<p>Add a package to your project. <code>luc</code> resolves its dependencies and records exact versions and checksums in <code>luc.lock</code>:</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc add owner/name</code></pre></div>\n<p><code>luc</code> comes with the <a href=\"https://luce.luciaos.com\">Luce installer</a>.</p>\n<h2 id=\"publishing\">Publishing<a class=\"anchor\" href=\"#publishing\" aria-label=\"link to this section\">#</a></h2>\n<p>Authors publish a version from their project with release notes. Every release keeps its source, which you can browse here or clone with Git:</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc publish -m \"What changed in this version\"</code></pre></div>\n<p>Publishing accounts are by invitation for now.</p>\n")
     try foot(out)
 
 ## Only absolute web links and in-page anchors survive from a README; anything else,

@@ -124,7 +124,7 @@ func refresh_index(site: str) -> !:
         try listing.put("\t")
         try listing.put(declared.description)
         try listing.put("\t")
-        try listing.put("application" if declared.is_application() else "library")
+        try listing.put(kind_of(&declared))
         try listing.put("\n")
     if same(buffer[..<listing.used], current): return
     let name = try terminated(index_path)
@@ -145,6 +145,21 @@ pub func ensure_front_page(site: str) -> !:
     var front = pages.page(html)
     try pages.index_page(&front, listing)
     try write_page(site, html[..<front.used])
+    # One page per kind, linked from the tabs at the top of every page.
+    for view in ["applications", "tools", "packages"]:
+        var kind_page = pages.page(html)
+        try pages.index_page(&kind_page, listing, view)
+        let directory_of_view = try paths.join(site, view)
+        defer strings.release(directory_of_view)
+        try ensure_directory(directory_of_view)
+        try write_page(directory_of_view, html[..<kind_page.used])
+
+## Until package.prisma declares its kind: a desktop bundle is an application, any other
+## program is a tool, and the rest are packages.
+func kind_of(declared: pkg.Definition*) -> str:
+    if declared.is_bundled(): return "application"
+    if declared.is_application(): return "tool"
+    return "package"
 
 func render_readme(readme: const u8[], output: u8[]) -> usize!:
     let document = try prism.decode(readme, prism.Codec.markdown)
@@ -264,7 +279,7 @@ pub func publish_listing(site: str, owner: str, name: str, version: str, pack: c
     try listing.put("\t")
     try listing.put(description)
     try listing.put("\t")
-    try listing.put("application" if declared.is_application() else "library")
+    try listing.put(kind_of(&declared))
     try listing.put("\n")
     let index_z = try terminated(index_path)
     defer strings.release(index_z)
@@ -277,6 +292,14 @@ pub func publish_listing(site: str, owner: str, name: str, version: str, pack: c
     var front = pages.page(html)
     try pages.index_page(&front, buffer[..<listing.used])
     try write_page(site, html[..<front.used])
+    # One page per kind, linked from the tabs at the top of every page.
+    for view in ["applications", "tools", "packages"]:
+        var kind_page = pages.page(html)
+        try pages.index_page(&kind_page, buffer[..<listing.used], view)
+        let directory_of_view = try paths.join(site, view)
+        defer strings.release(directory_of_view)
+        try ensure_directory(directory_of_view)
+        try write_page(directory_of_view, html[..<kind_page.used])
     if latest_text == version:
         let fragment = try alloc u8[pages.max_page] in memory.heap
         defer free(fragment) in memory.heap

@@ -53,6 +53,9 @@ pub struct PullRequest:
 
 func valid_owner(value: str) -> bool:
     if value.length == 0 or value.length > 32: return false
+    # Names the public site uses for its own pages and routes.
+    for reserved in ["applications", "tools", "packages", "assets", "index", "git", "v1", "health"]:
+        if value == reserved: return false
     for byte in value.bytes:
         if not ((byte >= 'a' and byte <= 'z') or (byte >= '0' and byte <= '9') or byte == '_'): return false
     return true

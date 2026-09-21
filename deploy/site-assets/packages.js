@@ -26,9 +26,10 @@
       shown += visible;
     });
     if (empty) empty.hidden = shown !== 0;
-    if (count) count.textContent = words.length === 0 ? total :
-      plural(found.applications || 0, "application", "applications") + " \u00b7 " +
-      plural(found.libraries || 0, "library", "libraries") + " match";
+    if (count) count.textContent = words.length === 0 ? total : sections.map(function (section) {
+      var word = section.id.replace(/s$/, "");
+      return plural(found[section.id] || 0, word, word + "s");
+    }).join(" \u00b7 ") + " match";
   }
   input.addEventListener("input", apply);
   if (input.value) apply();
