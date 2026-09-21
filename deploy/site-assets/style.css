@@ -1,0 +1,300 @@
+/* luce.luciaos.com — the documentation frame only. The shared palette,
+ * typography, prose, code, tables, cards, and common controls live in
+ * www/shared/core.css and are loaded before this file. */
+
+:root {
+  --prose: 46rem;
+  --side: 16rem;
+  --rail: 13rem;
+}
+
+/* Header frame and search */
+
+header.top {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  column-gap: 1.5rem;
+  height: var(--bar);
+  padding: 0 clamp(1.25rem, 4vw, 3rem);
+  background: var(--paper);
+  border-bottom: 1px solid var(--line-strong);
+}
+
+.mark { justify-self: start; }
+
+nav.tabs {
+  display: flex;
+  justify-self: center;
+  gap: 1.35rem;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+.tools { justify-self: end; }
+
+.find input {
+  width: 9rem;
+  max-width: 30vw;
+  padding: .36rem .55rem;
+  color: var(--ink);
+  background: var(--paper-raised);
+  border: 1px solid var(--line);
+  border-radius: 0;
+  font: inherit;
+  font-size: .82rem;
+}
+
+.find input::placeholder { color: var(--ink-faint); }
+
+#hits {
+  position: absolute;
+  top: var(--bar);
+  right: 1.25rem;
+  width: min(30rem, calc(100vw - 2.5rem));
+  max-height: 70vh;
+  overflow-y: auto;
+  background: var(--paper-raised);
+  border: 1px solid var(--line-strong);
+}
+
+#hits a {
+  display: block;
+  padding: .6rem .8rem;
+  color: var(--ink);
+  border-bottom: 1px solid var(--line);
+  text-decoration: none;
+}
+
+#hits a:last-child { border-bottom: 0; }
+#hits a:hover, #hits a.on { color: var(--ink); background: var(--accent-soft); }
+#hits b { display: block; font-weight: 800; }
+#hits em { display: block; color: var(--ink-faint); font-size: .82rem; font-style: normal; }
+#hits .none { padding: .8rem; color: var(--ink-faint); font-size: .86rem; }
+
+/* Documentation shell */
+
+.shell {
+  display: grid;
+  grid-template-columns: var(--side) minmax(0, 1fr) var(--rail);
+  align-items: start;
+  gap: 2.6rem;
+  max-width: 86rem;
+  margin: 0 auto;
+  padding: 0 1.5rem;
+}
+
+.side {
+  position: sticky;
+  top: var(--bar);
+  max-height: calc(100vh - var(--bar));
+  padding: 2.4rem 0;
+  overflow-y: auto;
+}
+
+.side details { border: 0; }
+
+.side summary,
+.rail h2 {
+  color: var(--ink-faint);
+  font-size: .69rem;
+  font-weight: 800;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+
+.side summary {
+  margin-bottom: .75rem;
+  padding-left: .65rem;
+  cursor: default;
+  list-style: none;
+}
+
+.side summary::before {
+  content: "■";
+  margin-right: .55rem;
+  color: var(--accent);
+  font-size: .6em;
+}
+
+.side summary::-webkit-details-marker { display: none; }
+.side ul { margin: 0; padding: 0; list-style: none; }
+.side li, .rail li { margin: 0; }
+
+.side li a {
+  display: block;
+  padding: .28rem .55rem .28rem .65rem;
+  color: var(--ink-soft);
+  border-left: 2px solid transparent;
+  font-size: .87rem;
+  font-weight: 500;
+  line-height: 1.45;
+  text-decoration: none;
+}
+
+.side li a:hover { color: var(--ink); background: var(--paper-soft); }
+
+.side li.part {
+  margin: 1.15rem .65rem .3rem;
+  color: var(--ink-faint);
+  font-size: .65rem;
+  font-weight: 800;
+  letter-spacing: .09em;
+  text-transform: uppercase;
+}
+
+.side li.part:first-of-type { margin-top: .85rem; }
+.side li.h3 a { padding-left: 1.45rem; font-size: .83rem; }
+
+.side li a.here {
+  color: var(--ink);
+  background: var(--accent-soft);
+  border-left-color: var(--accent);
+  font-weight: 800;
+}
+
+main { min-width: 0; padding: 2.5rem 0 4.5rem; }
+article { max-width: var(--prose); }
+article > ul, article > ol { margin: 0 0 1.15rem; padding-left: 1.45rem; }
+
+.rail {
+  position: sticky;
+  top: var(--bar);
+  max-height: calc(100vh - var(--bar));
+  padding: 2.85rem 0;
+  overflow-y: auto;
+}
+
+.rail h2 {
+  margin: 0 0 .75rem;
+  padding: 0;
+  border: 0;
+  line-height: 1.4;
+}
+
+.rail ul {
+  margin: 0;
+  padding: 0;
+  border-left: 1px solid var(--line);
+  list-style: none;
+}
+
+.rail li a {
+  display: block;
+  margin-left: -1px;
+  padding: .2rem .7rem;
+  color: var(--ink-faint);
+  border-left: 2px solid transparent;
+  font-size: .8rem;
+  font-weight: 500;
+  line-height: 1.45;
+  text-decoration: none;
+}
+
+.rail li.h3 a { padding-left: 1.35rem; font-size: .77rem; }
+.rail li a:hover { color: var(--ink); }
+.rail li a.on { color: var(--ink); border-left-color: var(--accent); font-weight: 800; }
+
+/* Front page and footer */
+
+.hero { max-width: 46rem; margin: 1.5rem 0 3rem; }
+.hero p.lead { margin-bottom: 1.7rem; color: var(--ink-soft); font-size: 1.15rem; line-height: 1.7; }
+.doors { grid-template-columns: repeat(auto-fit, minmax(15rem, 1fr)); }
+
+footer {
+  max-width: 86rem;
+  margin: 0 auto;
+  padding: 2.2rem 1.5rem 3rem;
+  color: var(--ink-faint);
+  border-top: 1px solid var(--line-strong);
+  font-size: .79rem;
+}
+
+footer p { margin: 0; }
+
+/* Responsive frame */
+
+@media (max-width: 70rem) {
+  .shell { grid-template-columns: var(--side) minmax(0, 1fr); gap: 2.2rem; }
+  .rail { display: none; }
+}
+
+@media (max-width: 66rem) {
+  header.top {
+    position: static;
+    display: flex;
+    flex-wrap: wrap;
+    height: auto;
+    row-gap: .2rem;
+    padding: .65rem 1.25rem;
+  }
+
+  nav.tabs { order: 3; width: 100%; justify-content: flex-start; }
+  .tools { margin-left: auto; }
+  .side, .rail { top: 0; }
+  #hits { position: fixed; top: auto; right: 1rem; left: 1rem; width: auto; }
+}
+
+@media (max-width: 52rem) {
+  .shell { grid-template-columns: minmax(0, 1fr); gap: 0; padding: 0 1rem; }
+
+  .side {
+    position: static;
+    max-height: none;
+    padding: 1.25rem 0 0;
+    overflow: visible;
+  }
+
+  .side details {
+    padding: .55rem .7rem;
+    background: var(--paper-soft);
+    border: 1px solid var(--line-strong);
+  }
+
+  .side summary { margin: 0; cursor: pointer; }
+  .side details[open] summary { margin-bottom: .55rem; }
+  .side ul { padding-top: .25rem; }
+  main { padding: 1.7rem 0 3.2rem; }
+  h1 { font-size: 2.15rem; }
+  h2 { margin-top: 2.7rem; }
+  header.top { padding: .55rem 1rem; }
+  .find input { width: 6.5rem; max-width: none; }
+  nav.seq { flex-direction: column; }
+  nav.seq a { max-width: none; }
+  nav.seq a.on { margin-left: 0; text-align: left; }
+}
+
+@media (max-width: 32rem) {
+  body { font-size: .94rem; }
+  .tools { gap: .55rem; }
+  a.cross { display: none; }
+  nav.tabs { gap: 1rem; }
+  .find input { width: 7.5rem; }
+}
+
+@media print {
+  header.top, .side, .rail, nav.seq, footer, button.copy { display: none; }
+  .shell { display: block; }
+  article { max-width: none; }
+}
+
+/* luce-base.luciaos.com additions: the landing lede and the chapter pager. */
+
+.lede { margin-top: -.5rem; color: var(--ink-faint); font-size: 1.05rem; }
+
+nav.pager {
+  display: flex;
+  justify-content: space-between;
+  gap: 1rem;
+  max-width: var(--prose);
+  margin: 3rem 0 2rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--line);
+  font-size: .92rem;
+}
+nav.pager a { text-decoration: none; }
+nav.pager a:hover { text-decoration: underline; }

@@ -22,6 +22,9 @@ for required in ('pkg.luciaos.com', 'max_size 65MiB', 'Cache-Control "no-store"'
 assert 'encode ' not in caddy and 'basic_auth' not in caddy
 for required in ('root * /var/lib/luce-pkg-site', 'file_server', 'immutable', '@registry path /git/* /v1/* /health'):
     assert required in caddy
+assert "script-src 'self'" in caddy and "unsafe-inline" not in caddy
+for asset in ('core.css', 'style.css', 'packages.css', 'site.js', 'theme.js', 'packages.js', 'mark.svg'):
+    assert (ROOT / 'deploy/site-assets' / asset).is_file()
 assert 'ReadWritePaths=/var/lib/luce-pkg-server /var/lib/luce-pkg-site' in service and 'UMask=0027' in service
 for script in ('backup.sh', 'restore.sh'):
     subprocess.run(['bash', '-n', ROOT / 'deploy' / script], check=True)

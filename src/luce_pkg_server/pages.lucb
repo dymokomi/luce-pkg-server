@@ -1,0 +1,183 @@
+## HTML for the public package site. Markup and class names follow luce.luciaos.com so
+## the shared stylesheets in /assets apply unchanged. Pages are complete without
+## JavaScript; assets/packages.js only adds filtering to the index.
+import strings
+import pkg
+import prism
+
+pub let max_page: usize = 2097152
+pub let max_readme: usize = 262144
+
+pub struct Page:
+    var bytes: u8[]
+    pub var used: usize
+
+    pub mutating func put(text: str) -> !:
+        if self.used + text.length > self.bytes.length: error(prism.invalid, "release: generated page is too large")
+        for i in 0..<text.length: self.bytes[self.used + i] = text.bytes[i]
+        self.used += text.length
+
+    ## Text and attribute values from packages are always escaped.
+    pub mutating func escaped(text: str) -> !:
+        var start: usize
+        for i in 0..<text.length:
+            let byte = text.bytes[i]
+            let entity = "&amp;" if byte == '&' else ("&lt;" if byte == '<' else ("&gt;" if byte == '>' else ("&quot;" if byte == '"' else ("&#x27;" if byte == '\'' else ""))))
+            if entity.length == 0: continue
+            try self.put((str)text.bytes[start..<i])
+            try self.put(entity)
+            start = i + 1
+        try self.put((str)text.bytes[start..])
+
+pub func page(buffer: u8[]) -> Page:
+    return Page(bytes = buffer)
+
+func head(out: Page*, title: str, description: str, root: str) -> !:
+    try out.put("<!doctype html>\n<html lang=\"en\">\n<head>\n<meta charset=\"utf-8\">\n<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n<title>")
+    try out.escaped(title)
+    try out.put("</title>\n<meta name=\"description\" content=\"")
+    try out.escaped(description)
+    try out.put("\">\n<link rel=\"stylesheet\" href=\"")
+    try out.put(root)
+    try out.put("assets/core.css\">\n<link rel=\"stylesheet\" href=\"")
+    try out.put(root)
+    try out.put("assets/style.css\">\n<link rel=\"stylesheet\" href=\"")
+    try out.put(root)
+    try out.put("assets/packages.css\">\n<link rel=\"icon\" href=\"")
+    try out.put(root)
+    try out.put("assets/mark.svg\" type=\"image/svg+xml\">\n<script src=\"")
+    try out.put(root)
+    try out.put("assets/theme.js\"></script>\n<script src=\"")
+    try out.put(root)
+    try out.put("assets/site.js\" defer></script>\n<script src=\"")
+    try out.put(root)
+    try out.put("assets/packages.js\" defer></script>\n</head>\n<body>\n<a class=\"skip\" href=\"#content\">Skip to content</a>\n<header class=\"top\">\n<a class=\"mark\" href=\"")
+    try out.put(root)
+    try out.put("\">Luce packages</a>\n<nav class=\"tabs\">\n<a class=\"here\" href=\"")
+    try out.put(root)
+    try out.put("\">Packages</a>\n</nav>\n<div class=\"tools\">\n<a class=\"cross\" href=\"https://luce.luciaos.com\">Luce</a><a class=\"cross\" href=\"https://luce-base.luciaos.com\">Luce Base</a><a class=\"cross\" href=\"https://luciaos.com\">LuciaOS</a>\n<button id=\"theme\" type=\"button\" aria-label=\"Switch between light and dark\">&#9681;</button>\n</div>\n</header>\n<div class=\"shell\">\n")
+
+func foot(out: Page*) -> !:
+    try out.put("</article>\n</main>\n</div>\n</body>\n</html>\n")
+
+func field(line: str, separator: u8, index: usize) -> str:
+    var start: usize
+    var seen: usize
+    for i in 0..<line.length + 1:
+        if i != line.length and line.bytes[i] != separator: continue
+        if seen == index: return (str)line.bytes[start..<i]
+        seen += 1
+        start = i + 1
+    return ""
+
+## The package list with a filter box. `listing` is the site's `index` file.
+pub func index_page(out: Page*, listing: const u8[]) -> !:
+    try head(out, "Luce packages", "Packages and applications for Luce and Luce Base. Browse and install without an account.", "/")
+    try out.put("<div class=\"side\">\n<details class=\"nav\" open>\n<summary>Pages</summary>\n<ul>\n<li><a class=\"here\" href=\"/\">Packages</a></li>\n</ul>\n</details>\n</div>\n<main id=\"content\">\n<article>\n<h1>Luce packages</h1>\n<p class=\"lede\">Packages and applications for Luce and Luce Base. Everything here is public: browse, fetch the source and build it without an account.</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc add owner/name</code></pre></div>\n<div class=\"find\"><input id=\"filter\" type=\"search\" placeholder=\"Filter packages\" aria-label=\"Filter packages\" autocomplete=\"off\"></div>\n<div class=\"cards\" id=\"packages\">\n")
+    var start: usize
+    var count: usize
+    for end in 0..<listing.length:
+        if listing[end] != '\n': continue
+        let line = (str)listing[start..<end]
+        start = end + 1
+        let coordinate = field(line, '\t', 0)
+        if coordinate.length == 0: continue
+        count += 1
+        try out.put("<a class=\"card\" href=\"/")
+        try out.escaped(coordinate)
+        try out.put("/\"><strong>")
+        try out.escaped(coordinate)
+        try out.put("</strong><span>")
+        try out.escaped(field(line, '\t', 2))
+        try out.put(" &middot; ")
+        try out.escaped(field(line, '\t', 1))
+        try out.put("</span></a>\n")
+    try out.put("</div>\n")
+    if count == 0: try out.put("<p>No packages have been released yet.</p>\n")
+    try foot(out)
+
+## Only absolute web links and in-page anchors survive from a README; anything else,
+## including javascript: and relative paths that do not exist here, becomes "#".
+func safe_links(out: Page*, fragment: str) -> !:
+    var at: usize
+    while at < fragment.length:
+        var attribute = ""
+        if strings.starts_with((str)fragment.bytes[at..], " href=\""): attribute = " href=\""
+        elif strings.starts_with((str)fragment.bytes[at..], " src=\""): attribute = " src=\""
+        if attribute.length == 0:
+            try out.put((str)fragment.bytes[at..<at + 1])
+            at += 1
+            continue
+        var end = at + attribute.length
+        while end < fragment.length and fragment.bytes[end] != '"': end += 1
+        let value = (str)fragment.bytes[at + attribute.length..<end]
+        let allowed = strings.starts_with(value, "https://") or strings.starts_with(value, "http://") or (attribute == " href=\"" and strings.starts_with(value, "#"))
+        try out.put(attribute)
+        try out.put(value if allowed else "#")
+        at = end
+
+## One package: description, install command, versions, dependencies and README.
+## `versions` is the package's `versions` file; `readme` is already-rendered HTML.
+pub func package_page(out: Page*, definition: pkg.Definition*, versions: const u8[], readme: str) -> !:
+    var title: u8[160]
+    let coordinate = try format(title, f"{definition.owner}/{definition.name}")
+    try head(out, coordinate, definition.description, "/")
+    try out.put("<div class=\"side\">\n<details class=\"nav\" open>\n<summary>Pages</summary>\n<ul>\n<li><a href=\"/\">Packages</a></li>\n</ul>\n</details>\n<details class=\"nav\" open>\n<summary>On this page</summary>\n<ul>\n<li class=\"h2\"><a href=\"#install\">Install</a></li><li class=\"h2\"><a href=\"#versions\">Versions</a></li>")
+    if definition.dependency_count > 0: try out.put("<li class=\"h2\"><a href=\"#dependencies\">Dependencies</a></li>")
+    if readme.length > 0: try out.put("<li class=\"h2\"><a href=\"#readme\">Readme</a></li>")
+    try out.put("\n</ul>\n</details>\n</div>\n<main id=\"content\">\n<article>\n<h1>")
+    try out.escaped(coordinate)
+    try out.put("</h1>\n<p class=\"lede\">")
+    try out.escaped(definition.description)
+    try out.put("</p>\n<p>")
+    try out.put("An application" if definition.is_application() else "A library")
+    try out.put(" written in <code>")
+    try out.escaped(definition.language)
+    try out.put("</code>. Latest release <code>")
+    try out.escaped(definition.version)
+    try out.put("</code>.</p>\n<h2 id=\"install\">Install<a class=\"anchor\" href=\"#install\" aria-label=\"link to this section\">#</a></h2>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc ")
+    try out.put("install " if definition.is_application() else "add ")
+    try out.escaped(coordinate)
+    try out.put("</code></pre></div>\n<h2 id=\"versions\">Versions<a class=\"anchor\" href=\"#versions\" aria-label=\"link to this section\">#</a></h2>\n<div class=\"table\"><table><thead><tr><th>Version</th><th>SHA-256</th><th>Commit</th></tr></thead><tbody>\n")
+    # Newest last in the file; show newest first.
+    var end = versions.length
+    while end > 0:
+        var start = end - 1
+        while start > 0 and versions[start - 1] != '\n': start -= 1
+        let line = (str)versions[start..<end - 1] if versions[end - 1] == '\n' else (str)versions[start..<end]
+        end = start
+        let version = field(line, ' ', 0)
+        if version.length == 0: continue
+        try out.put("<tr><td><a href=\"/")
+        try out.escaped(coordinate)
+        try out.put("/")
+        try out.escaped(version)
+        try out.put(".pack\">")
+        try out.escaped(version)
+        try out.put("</a></td><td><code>")
+        try out.escaped(field(line, ' ', 1))
+        try out.put("</code></td><td><code>")
+        let commit = field(line, ' ', 2)
+        try out.escaped((str)commit.bytes[..<12] if commit.length > 12 else commit)
+        try out.put("</code></td></tr>\n")
+    try out.put("</tbody></table></div>\n")
+    if definition.dependency_count > 0:
+        try out.put("<h2 id=\"dependencies\">Dependencies<a class=\"anchor\" href=\"#dependencies\" aria-label=\"link to this section\">#</a></h2>\n<div class=\"table\"><table><thead><tr><th>Package</th><th>Version</th></tr></thead><tbody>\n")
+        for i in 0..<definition.dependency_count:
+            let item = try definition.dependency_at(i)
+            try out.put("<tr><td><a href=\"/")
+            try out.escaped(item.owner)
+            try out.put("/")
+            try out.escaped(item.name)
+            try out.put("/\">")
+            try out.escaped(item.owner)
+            try out.put("/")
+            try out.escaped(item.name)
+            try out.put("</a></td><td><code>")
+            try out.escaped(item.version)
+            try out.put("</code></td></tr>\n")
+        try out.put("</tbody></table></div>\n")
+    if readme.length > 0:
+        try out.put("<h2 id=\"readme\">Readme<a class=\"anchor\" href=\"#readme\" aria-label=\"link to this section\">#</a></h2>\n")
+        try safe_links(out, readme)
+    try foot(out)

@@ -36,6 +36,20 @@ once so Caddy can read what the service writes:
 sudo install -d -o luce-pkg -g caddy -m 2750 /var/lib/luce-pkg-site
 ```
 
+Copy the site's stylesheets and scripts from the release bundle; they are shared
+with luce.luciaos.com and are not written by the registry:
+
+```sh
+sudo install -d -o luce-pkg -g caddy -m 2750 /var/lib/luce-pkg-site/assets
+sudo install -o luce-pkg -g caddy -m 0640 /opt/luce-pkg-server/current/site-assets/* /var/lib/luce-pkg-site/assets/
+```
+
+Each release also writes `index.html` (the package list with a filter) and
+`<owner>/<name>/index.html` (description, install command, versions, dependencies
+and the rendered README). README text is untrusted: raw HTML is escaped, links
+other than `http(s)://` and `#` are neutralised, and Caddy sends a
+Content-Security-Policy that forbids inline script.
+
 The setgid bit gives new files the `caddy` group, and the unit's `UMask=0027`
 makes them group-readable. The database directory stays `0700`, so the wider
 umask exposes nothing there. Back this directory up together with the database:

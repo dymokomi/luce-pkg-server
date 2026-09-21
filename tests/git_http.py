@@ -177,6 +177,11 @@ language = "luce-base"
     assert (site / '1.3.0.prisma').read_bytes() == (repo / 'package.prisma').read_bytes()
     assert (site / 'versions').read_text() == f'1.3.0 {hashlib.sha256(pack).hexdigest()} {released}\n'
     assert (root / 'site' / 'index').read_text() == 'testuser/git-wire\t1.3.0\tRelease fixture\n'
+    front = (root / 'site' / 'index.html').read_text()
+    assert '<a class="card" href="/testuser/git-wire/">' in front and 'Release fixture' in front
+    detail = (site / 'index.html').read_text()
+    assert '<h1>testuser/git-wire</h1>' in detail and 'luc add testuser/git-wire' in detail
+    assert hashlib.sha256(pack).hexdigest() in detail and released[:12] in detail
     unpacked = root / 'release-unpacked'
     subprocess.run(['git', 'init', '-q', str(unpacked)], env=env, check=True, timeout=30)
     subprocess.run(['git', '-C', str(unpacked), 'unpack-objects'], input=pack, env=env, check=True, capture_output=True, timeout=30)

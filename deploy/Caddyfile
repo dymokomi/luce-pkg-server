@@ -27,6 +27,8 @@ pkg.luciaos.com {
 	# registry wrote when a version tag was pushed. Releases never change.
 	handle {
 		root * /var/lib/luce-pkg-site
+		# Pages carry package-supplied README text: no inline script, no foreign code.
+		header Content-Security-Policy "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' https:; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
 		@release path_regexp \.(pack|prisma)$
 		header @release Cache-Control "public, max-age=31536000, immutable"
 		@listing not path_regexp \.(pack|prisma)$

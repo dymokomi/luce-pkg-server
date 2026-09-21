@@ -11,6 +11,7 @@ import paths
 import strings
 import pkg
 import prism
+import luce_pkg_server.pages as pages
 
 let max_listing: usize = 4194304
 
@@ -64,6 +65,23 @@ pub func publish_files(site: str, owner: str, name: str, version: str, pack: con
     defer strings.release(definition_path)
     try immutable(definition_path, definition)
 
+func render_readme(readme: const u8[], output: u8[]) -> usize!:
+    let document = try prism.decode(readme, prism.Codec.markdown)
+    defer document.release()
+    let encoded = try prism.encode(document, prism.Codec.html)
+    defer encoded.release()
+    let bytes = encoded.value().bytes()
+    if bytes.length > output.length: error(prism.invalid, "rendered README is too large")
+    for i in 0..<bytes.length: output[i] = bytes[i]
+    return bytes.length
+
+func write_page(directory: str, bytes: const u8[]) -> !:
+    let path = try paths.join(directory, "index.html")
+    defer strings.release(path)
+    let name = try terminated(path)
+    defer strings.release(name)
+    try files.write_atomic((c.str)name, bytes, synchronize = true)
+
 func read_listing(path: str) -> u8[]!:
     let name = try terminated(path)
     defer strings.release(name)
@@ -90,7 +108,11 @@ struct Text:
         self.used += text.length
 
 ## Step two, after the tag ref is committed: make the release discoverable.
-pub func publish_listing(site: str, owner: str, name: str, version: str, pack: const u8[], commit: str, description: str) -> !:
+pub func publish_listing(site: str, owner: str, name: str, version: str, pack: const u8[], commit: str,
+        definition: const u8[], readme: const u8[]) -> !:
+    var declared = try pkg.decode_package(definition)
+    defer declared.close()
+    let description = declared.description
     var digest: u8[32]
     discard(try pkg.source_digest(pack, digest))
     var digest_text: u8[64]
@@ -164,3 +186,25 @@ pub func publish_listing(site: str, owner: str, name: str, version: str, pack: c
     let index_z = try terminated(index_path)
     defer strings.release(index_z)
     try files.write_atomic((c.str)index_z, buffer[..<listing.used], synchronize = true)
+
+    # Pages. The package page describes the latest release, so an older patch release
+    # pushed later refreshes only the versions it lists.
+    let html = try alloc u8[pages.max_page] in memory.heap
+    defer free(html) in memory.heap
+    var front = pages.page(html)
+    try pages.index_page(&front, buffer[..<listing.used])
+    try write_page(site, html[..<front.used])
+    if latest_text == version:
+        let fragment = try alloc u8[pages.max_page] in memory.heap
+        defer free(fragment) in memory.heap
+        var rendered_size: usize = 0
+        if readme.length > 0:
+            # A README that does not render is left out; it never blocks a release.
+            rendered_size = render_readme(readme, fragment) catch:
+                recover 0
+        let rendered = (str)fragment[..<rendered_size]
+        let listed = try read_listing(versions_path)
+        defer discard_listing(listed)
+        var detail = pages.page(html)
+        try pages.package_page(&detail, &declared, listed, rendered)
+        try write_page(directory, html[..<detail.used])

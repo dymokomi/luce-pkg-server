@@ -13,6 +13,7 @@ import time
 import utf8
 import luce_pkg_server.release_pack as release_pack
 import luce_pkg_server.site as site
+import luce_pkg_server.pages as pages
 
 pub let max_object_bytes: usize = 67108864
 pub let chunk_bytes: usize = 1048576
@@ -577,14 +578,46 @@ pub struct TagRelease:
     pub var commit: u8[40]
     pub var pack_size: usize
     pub var definition_size: usize
-    pub var description: u8[256]
-    pub var description_size: usize
+    pub var readme_size: usize
 
 ## Build the public release of a version tag: a pack holding the tagged commit and its
 ## complete tree (no history), plus that commit's package.prisma. The definition must
 ## name this owner, this repository and this version.
+## Regular file at a `/`-separated path below `tree`, copied into `output`; 0 when absent.
+func tree_file(session: prism.Session*, path: str, tree: const u8[], file: str, output: u8[]) -> usize!:
+    var current: u8[20]
+    for i in 0..<(usize)20: current[i] = tree[i]
+    var start: usize
+    for end in 0..<file.length + 1:
+        if end != file.length and file.bytes[end] != '/': continue
+        let part = (str)file.bytes[start..<end]
+        let last = end == file.length
+        start = end + 1
+        let value = try checked_object(session, path, current)
+        defer value.release()
+        let object = try git.decode_object(value.value().bytes())
+        if object.kind != "tree": return 0
+        var found = false
+        var at: usize = 0
+        while at < object.payload.length:
+            let entry = try git.decode_tree_entry(object.payload[at..])
+            at += entry.consumed
+            if entry.name != part: continue
+            if last and entry.mode != "100644" and entry.mode != "100755": return 0
+            if not last and entry.mode != "40000": return 0
+            for i in 0..<(usize)20: current[i] = entry.id[i]
+            found = true
+            break
+        if not found: return 0
+    let value = try checked_object(session, path, current)
+    defer value.release()
+    let blob = try git.decode_object(value.value().bytes())
+    if blob.kind != "blob" or blob.payload.length > output.length: return 0
+    for i in 0..<blob.payload.length: output[i] = blob.payload[i]
+    return blob.payload.length
+
 func tag_release(database: db.Database*, owner: str, name: str, target: const u8[], version: str,
-        pack: u8[], definition: u8[]) -> TagRelease!:
+        pack: u8[], definition: u8[], readme: u8[]) -> TagRelease!:
     var path_buffer: u8[192]
     let path = try repo_path(owner, owner, name, path_buffer)
     let snapshot = try database.snapshot()
@@ -625,8 +658,7 @@ func tag_release(database: db.Database*, owner: str, name: str, target: const u8
     defer declared.close()
     if declared.owner != owner or declared.name != name: error(prism.invalid, "release: package.prisma owner/name must match the repository")
     if declared.version != version: error(prism.invalid, "release: package.prisma version must match the release tag")
-    for i in 0..<declared.description.length: result.description[i] = declared.description.bytes[i]
-    result.description_size = declared.description.length
+    if declared.readme.length > 0: result.readme_size = try tree_file(session, path, tree_id, declared.readme, readme)
 
     let nodes = try alloc GraphNode[4096] in memory.heap
     defer free(nodes) in memory.heap
@@ -740,18 +772,20 @@ pub func receive_pack(database: db.Database*, principal: str, owner: str, name: 
     let pack = try alloc u8[max_release_pack] in memory.heap
     defer free(pack) in memory.heap
     var definition: u8[65536]
+    let readme = try alloc u8[pages.max_readme] in memory.heap
+    defer free(readme) in memory.heap
     for i in 0..<request.count:
         let version = release_version(updates[i].name)
         if version.length == 0: continue
-        let built = try tag_release(database, owner, name, updates[i].target, version, pack, definition)
+        let built = try tag_release(database, owner, name, updates[i].target, version, pack, definition, readme)
         try site.publish_files(site_root, owner, name, version, pack[..<built.pack_size], definition[..<built.definition_size])
     try update_refs(database, principal, owner, name, updates[..<request.count])
     for i in 0..<request.count:
         let version = release_version(updates[i].name)
         if version.length == 0: continue
-        let built = try tag_release(database, owner, name, updates[i].target, version, pack, definition)
+        let built = try tag_release(database, owner, name, updates[i].target, version, pack, definition, readme)
         try site.publish_listing(site_root, owner, name, version, pack[..<built.pack_size],
-            (str)built.commit[0..], (str)built.description[..<built.description_size])
+            (str)built.commit[0..], definition[..<built.definition_size], readme[..<built.readme_size])
     return request.count
 
 pub let max_ref_name: usize = 1024

@@ -53,6 +53,8 @@ install -m 0644 "$root/deploy/Caddyfile" "$staging/"
 install -m 0644 "$root/deploy/README.md" "$staging/DEPLOYMENT.md"
 install -m 0755 "$root/deploy/backup.sh" "$staging/"
 install -m 0755 "$root/deploy/restore.sh" "$staging/"
+mkdir "$staging/site-assets"
+install -m 0644 "$root"/deploy/site-assets/* "$staging/site-assets/"
 printf '%s\n' "$source_commit" >"$staging/SOURCE_COMMIT"
 
 : >"$staging/DEPENDENCY_PINS"

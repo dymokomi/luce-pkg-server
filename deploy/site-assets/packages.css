@@ -1,0 +1,16 @@
+/* The only styles the package site adds to the shared Luce stylesheets. */
+article .find { margin: 1.5rem 0 1rem; }
+article .find input { width: 100%; max-width: 28rem; }
+.card[hidden] { display: none; }
+
+/* README fragments are plain HTML without the site's wrappers. */
+#readme ~ h1 { font-size: 1.5rem; margin-top: 2rem; }
+#readme ~ pre {
+  margin: 1rem 0;
+  padding: .8rem 1rem;
+  overflow-x: auto;
+  background: var(--paper-raised);
+  border: 1px solid var(--line-strong);
+}
+#readme ~ pre code { padding: 0; background: none; }
+#readme ~ table { display: block; overflow-x: auto; }
