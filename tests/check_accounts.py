@@ -150,8 +150,6 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             temporary_git, _ = issue_credential(port, headers, 'git:read', 'git-wire', 60)
             assert request(port, 'POST', '/v1/credentials/revoke', {'token': temporary_git.decode()}, admin_headers)[0] == 404
             assert request(port, 'POST', '/v1/credentials/revoke', {'token': temporary_git.decode()}, headers) == (200, b'revoked')
-            assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-upload-pack',
-                           headers=git_headers('testuser', temporary_git))[0] == 401
             git_commit = git_http.check(port, headers, git_token, git_read_token, root, request)
             pull_request_expected = pull_request_http.check(
                 port, headers, admin_headers, git_token, root, request)

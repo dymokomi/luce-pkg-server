@@ -155,7 +155,17 @@ language = "luce-base"
     status, _ = transfer(port, 'POST', fetch_path, wire,
                          {**headers, 'Content-Type': 'application/x-git-upload-pack-request'})
     assert status == 403
-    assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-upload-pack')[0] == 401
+    # Everything is public: discovery and a complete clone need no credential at all,
+    # while a push without one is still refused.
+    assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-upload-pack')[0] == 200
+    assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack')[0] == 401
+    anonymous_env = {key: value for key, value in env.items() if key not in ('GIT_ASKPASS', 'LUCE_GIT_TOKEN', 'LUCE_GIT_USERNAME')}
+    anonymous = root / 'git-anonymous-clone'
+    subprocess.run(['git', 'clone', '-q', endpoint, str(anonymous)], env=anonymous_env, check=True, capture_output=True, timeout=90)
+    assert (anonymous / 'large.txt').read_bytes() == (repo / 'large.txt').read_bytes()
+    subprocess.run(['git', '-C', str(anonymous), 'fsck', '--strict'], env=anonymous_env, check=True, capture_output=True, timeout=90)
+    refused = subprocess.run(['git', '-C', str(anonymous), 'push', 'origin', 'HEAD:refs/heads/anonymous'], env=anonymous_env, capture_output=True, timeout=90)
+    assert refused.returncode != 0
     assert request(port, 'POST', fetch_path, headers=headers)[0] == 415
     assert request(port, 'POST', fetch_path, headers={**headers, 'Content-Type': 'application/x-git-upload-pack-request'})[0] == 400
     # A version tag publishes a static, history-free release; main is left untouched.

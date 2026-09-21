@@ -17,6 +17,8 @@ import http_credentials as transport_auth
 import crypto_native as crypto
 import time
 import rate_limit
+import sync
+import prism
 
 let max_release_upload: usize = repositories.max_object_bytes + 24576 + 3309 + 8
 
@@ -514,24 +516,30 @@ struct App:
         let owner = request.parameter("owner") else return reply("invalid path", 400)
         let name = request.parameter("name") else return reply("invalid path", 400)
         if not repositories.valid_name(name): return reply("invalid repository", 400)
-        var credential_buffer: u8[128]
-        defer crypto.wipe(credential_buffer)
-        let header = (request.header("Authorization") catch: return basic_challenge()) else return basic_challenge()
-        let credential = transport_auth.decode_basic(header, credential_buffer) catch: return basic_challenge()
-        if credential.username != owner: return basic_challenge()
         var upload = false
-        var scope = auth.scope_git_write
         if request.method() == "GET" or request.method() == "HEAD":
             let service = (request.query("service") catch: return reply("invalid service", 400)) else return reply("service required", 400)
             if service != "git-receive-pack" and service != "git-upload-pack": return reply("unsupported Git service", 403)
             upload = service == "git-upload-pack"
-            scope = auth.scope_git_read if upload else auth.scope_git_write
         elif strings.ends_with(request.path(), "/git-upload-pack"):
             upload = true
-            scope = auth.scope_git_read
-        let who = self.authority.value().authorize_credential(credential.token, scope, owner, name) catch: return basic_challenge()
-        defer who.release()
-        let principal = who.value().text_at() catch: return reply("internal error", 500)
+        # Everything is public: clone and fetch need no account and read as the owner.
+        # Only a push authenticates, with a git:write credential for this repository.
+        var principal = owner
+        var credential_buffer: u8[128]
+        defer crypto.wipe(credential_buffer)
+        var who: interop.Reference[prism.Value]? = none
+        defer release_principal(who)
+        if upload:
+            if not readers.enter(): return busy()
+        else:
+            let header = (request.header("Authorization") catch: return basic_challenge()) else return basic_challenge()
+            let credential = transport_auth.decode_basic(header, credential_buffer) catch: return basic_challenge()
+            if credential.username != owner: return basic_challenge()
+            let authorized = self.authority.value().authorize_credential(credential.token, auth.scope_git_write, owner, name) catch: return basic_challenge()
+            who = authorized
+            principal = authorized.value().text_at() catch: return reply("internal error", 500)
+        defer if_upload_leave(upload)
         if request.method() == "GET" or request.method() == "HEAD":
             let output = alloc u8[4194304] in memory.heap catch: return reply("internal error", 500)
             defer free(output) in memory.heap
@@ -590,6 +598,34 @@ struct App:
             used += git.encode_packet(git.PacketKind.data, text.bytes, output[used..]) catch: return reply("internal error", 500)
         used += git.encode_packet(git.PacketKind.flush, b"", output[used..]) catch: return reply("internal error", 500)
         return binary_reply(output[..<used], "application/x-git-receive-pack-result")
+
+## Anonymous clone and fetch do real work per request, so only a few run at once.
+struct Readers:
+    var mutex: sync.Mutex
+    var active: u32
+
+    mutating func enter() -> bool:
+        self.mutex.lock()
+        defer self.mutex.unlock()
+        if self.active >= 6: return false
+        self.active += 1
+        return true
+
+    mutating func leave():
+        self.mutex.lock()
+        defer self.mutex.unlock()
+        if self.active > 0: self.active -= 1
+
+var readers: Readers
+
+func if_upload_leave(upload: bool):
+    if upload: readers.leave()
+
+func release_principal(who: interop.Reference[prism.Value]?):
+    if let held = who: held.release()
+
+func busy() -> interop.Outcome[interop.Reference[http.Response]]:
+    return reply("too many concurrent fetches; retry shortly", 503)
 
 let app_type = interop.Type[App]("registry", App.close)
 
