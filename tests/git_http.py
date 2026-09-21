@@ -193,10 +193,10 @@ language = "luce-base"
     pack = (site / '1.3.0.pack').read_bytes()
     assert (site / '1.3.0.prisma').read_bytes() == (repo / 'package.prisma').read_bytes()
     assert (site / 'versions').read_text() == f'1.3.0 {hashlib.sha256(pack).hexdigest()} {released}\n'
-    assert (root / 'site' / 'index').read_text() == 'testuser/git-wire\t1.3.0\tRelease fixture\n'
+    assert (root / 'site' / 'index').read_text() == 'testuser/git-wire\t1.3.0\tRelease fixture\tlibrary\n'
     front = (root / 'site' / 'index.html').read_text()
     assert '<a class="card" href="/testuser/git-wire/">' in front and 'Release fixture' in front
-    assert 'Find, install and publish Luce packages' in front and '<p class="count">1 package</p>' in front
+    assert 'Find, install and publish Luce packages' in front and '0 applications &middot; 1 library</p>' in front and '<section class="kind" id="libraries">' in front and 'id="applications"' not in front
     detail = (site / 'index.html').read_text()
     assert '<h1>testuser/git-wire</h1>' in detail and 'luc add testuser/git-wire' in detail
     assert hashlib.sha256(pack).hexdigest() in detail and released[:12] in detail

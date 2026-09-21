@@ -89,10 +89,53 @@ pub func write_nested(site: str, owner: str, name: str, relative: str, bytes: co
     defer strings.release(terminated_path)
     try files.write_atomic((c.str)terminated_path, bytes)
 
+## Rebuild each index line's description and kind from the package's latest definition, so
+## an index written by an older registry gains what a newer front page shows.
+func refresh_index(site: str) -> !:
+    let index_path = try paths.join(site, "index")
+    defer strings.release(index_path)
+    let current = try read_listing(index_path)
+    defer discard_listing(current)
+    if current.length == 0: return
+    let buffer = try alloc u8[max_listing] in memory.heap
+    defer free(buffer) in memory.heap
+    var listing = Text(bytes = buffer)
+    var start: usize
+    for end in 0..<current.length:
+        if current[end] != '\n': continue
+        let line = (str)current[start..<end]
+        start = end + 1
+        let (coordinate, rest) = strings.split_once(line, "\t") else continue
+        let (latest, _) = strings.split_once(rest, "\t") else continue
+        var relative: u8[400]
+        let definition_path = try paths.join(site, try format(relative, f"{coordinate}/{latest}.prisma"))
+        defer strings.release(definition_path)
+        let bytes = try read_listing(definition_path)
+        defer discard_listing(bytes)
+        var declared = pkg.decode_package(bytes) catch:
+            # Keep a line whose definition cannot be read exactly as it was.
+            try listing.put(line)
+            try listing.put("\n")
+            continue
+        defer declared.close()
+        try listing.put(coordinate)
+        try listing.put("\t")
+        try listing.put(latest)
+        try listing.put("\t")
+        try listing.put(declared.description)
+        try listing.put("\t")
+        try listing.put("application" if declared.is_application() else "library")
+        try listing.put("\n")
+    if same(buffer[..<listing.used], current): return
+    let name = try terminated(index_path)
+    defer strings.release(name)
+    try files.write_atomic((c.str)name, buffer[..<listing.used], synchronize = true)
+
 ## Rewrite the front page from the current package list. Done at every start, so a new
 ## release of the registry refreshes its wording without waiting for a package release.
 pub func ensure_front_page(site: str) -> !:
     try ensure_directory(site)
+    try refresh_index(site)
     let index_path = try paths.join(site, "index")
     defer strings.release(index_path)
     let listing = try read_listing(index_path)
@@ -220,6 +263,8 @@ pub func publish_listing(site: str, owner: str, name: str, version: str, pack: c
     try listing.put(latest_text)
     try listing.put("\t")
     try listing.put(description)
+    try listing.put("\t")
+    try listing.put("application" if declared.is_application() else "library")
     try listing.put("\n")
     let index_z = try terminated(index_path)
     defer strings.release(index_z)

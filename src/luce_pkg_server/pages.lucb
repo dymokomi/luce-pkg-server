@@ -81,35 +81,57 @@ func field(line: str, separator: u8, index: usize) -> str:
 ## a plain definition and how to install and publish. `listing` is the site's `index` file.
 pub func index_page(out: Page*, listing: const u8[]) -> !:
     try head(out, "Luce Package Index", "Find, install and publish packages for Luce and Luce Base.", "/")
-    var total: usize
-    for byte in listing:
-        if byte == '\n': total += 1
-    try out.put("<div class=\"side\">\n<details class=\"nav\" open>\n<summary>Pages</summary>\n<ul>\n<li><a class=\"here\" href=\"/\">Packages</a></li>\n</ul>\n</details>\n<details class=\"nav\" open>\n<summary>On this page</summary>\n<ul>\n<li class=\"h2\"><a href=\"#installing\">Installing</a></li><li class=\"h2\"><a href=\"#publishing\">Publishing</a></li>\n</ul>\n</details>\n</div>\n<main id=\"content\">\n<article>\n<h1>Find, install and publish Luce packages</h1>\n<div class=\"find\"><input id=\"filter\" type=\"search\" placeholder=\"Search packages\" aria-label=\"Search packages\" autocomplete=\"off\"></div>\n<p class=\"count\">")
-    var number: u8[32]
-    try out.put(try format(number, f"{total}"))
-    try out.put(" package" if total == 1 else " packages")
-    try out.put("</p>\n")
-    # The list and its heading appear once there is something to list.
-    if total > 0: try out.put("<h2 id=\"packages-list\">Packages<a class=\"anchor\" href=\"#packages-list\" aria-label=\"link to this section\">#</a></h2>\n<div class=\"cards\" id=\"packages\">\n")
+    # An index line is: owner/name TAB latest TAB description TAB kind.
+    var applications: usize
+    var libraries: usize
     var start: usize
     for end in 0..<listing.length:
         if listing[end] != '\n': continue
         let line = (str)listing[start..<end]
         start = end + 1
-        let coordinate = field(line, '\t', 0)
-        if coordinate.length == 0: continue
-        try out.put("<a class=\"card\" href=\"/")
-        try out.escaped(coordinate)
-        try out.put("/\"><strong>")
-        try out.escaped(coordinate)
-        try out.put("</strong><span>")
-        let summary = field(line, '\t', 2)
-        if summary.length > 0:
-            try out.escaped(summary)
-            try out.put(" &middot; ")
-        try out.escaped(field(line, '\t', 1))
-        try out.put("</span></a>\n")
-    if total > 0: try out.put("</div>\n")
+        if field(line, '\t', 0).length == 0: continue
+        if field(line, '\t', 3) == "application": applications += 1
+        else: libraries += 1
+    try out.put("<div class=\"side\">\n<details class=\"nav\" open>\n<summary>Pages</summary>\n<ul>\n<li><a class=\"here\" href=\"/\">Packages</a></li>\n</ul>\n</details>\n<details class=\"nav\" open>\n<summary>On this page</summary>\n<ul>\n")
+    if applications > 0: try out.put("<li class=\"h2\"><a href=\"#applications\">Applications</a></li>")
+    if libraries > 0: try out.put("<li class=\"h2\"><a href=\"#libraries\">Libraries</a></li>")
+    try out.put("<li class=\"h2\"><a href=\"#installing\">Installing</a></li><li class=\"h2\"><a href=\"#publishing\">Publishing</a></li>\n</ul>\n</details>\n</div>\n<main id=\"content\">\n<article>\n<h1>Find, install and publish Luce packages</h1>\n<div class=\"find\"><input id=\"filter\" type=\"search\" placeholder=\"Search applications and libraries\" aria-label=\"Search applications and libraries\" autocomplete=\"off\"></div>\n<p class=\"count\">")
+    var number: u8[32]
+    try out.put(try format(number, f"{applications}"))
+    try out.put(" application" if applications == 1 else " applications")
+    try out.put(" &middot; ")
+    try out.put(try format(number, f"{libraries}"))
+    try out.put(" library" if libraries == 1 else " libraries")
+    try out.put("</p>\n<p id=\"no-results\" hidden>Nothing matches that search.</p>\n")
+    # Applications first: they are what most visitors come to install.
+    for round in 0..<(usize)2:
+        let wanted = "application" if round == 0 else "library"
+        if (applications if round == 0 else libraries) == 0: continue
+        if round == 0:
+            try out.put("<section class=\"kind\" id=\"applications\">\n<h2>Applications<a class=\"anchor\" href=\"#applications\" aria-label=\"link to this section\">#</a></h2>\n<p class=\"kind-note\">Programs you install and run: <code>luc install owner/name</code></p>\n<div class=\"cards\">\n")
+        else:
+            try out.put("<section class=\"kind\" id=\"libraries\">\n<h2>Libraries<a class=\"anchor\" href=\"#libraries\" aria-label=\"link to this section\">#</a></h2>\n<p class=\"kind-note\">Code you build on in your own project: <code>luc add owner/name</code></p>\n<div class=\"cards\">\n")
+        start = 0
+        for end in 0..<listing.length:
+            if listing[end] != '\n': continue
+            let line = (str)listing[start..<end]
+            start = end + 1
+            let coordinate = field(line, '\t', 0)
+            if coordinate.length == 0: continue
+            let kind = "application" if field(line, '\t', 3) == "application" else "library"
+            if kind != wanted: continue
+            try out.put("<a class=\"card\" href=\"/")
+            try out.escaped(coordinate)
+            try out.put("/\"><strong>")
+            try out.escaped(coordinate)
+            try out.put("</strong><span>")
+            let summary = field(line, '\t', 2)
+            if summary.length > 0:
+                try out.escaped(summary)
+                try out.put(" &middot; ")
+            try out.escaped(field(line, '\t', 1))
+            try out.put("</span></a>\n")
+        try out.put("</div>\n</section>\n")
     try out.put("<p>The Luce Package Index is a repository of libraries and applications for the <a href=\"https://luce.luciaos.com\">Luce</a> and <a href=\"https://luce-base.luciaos.com\">Luce Base</a> programming languages.</p>\n<h2 id=\"installing\">Installing<a class=\"anchor\" href=\"#installing\" aria-label=\"link to this section\">#</a></h2>\n<p>Add a library to your project. <code>luc</code> resolves its dependencies and records exact versions and checksums in <code>luc.lock</code>:</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc add owner/name</code></pre></div>\n<p>Install an application. It is built from source on your machine:</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc install owner/name</code></pre></div>\n<p><code>luc</code> comes with the <a href=\"https://luce.luciaos.com\">Luce installer</a>.</p>\n<h2 id=\"publishing\">Publishing<a class=\"anchor\" href=\"#publishing\" aria-label=\"link to this section\">#</a></h2>\n<p>Package authors publish a version from their project with release notes. Every release keeps its source, which you can browse here or clone with Git:</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc publish -m \"What changed in this version\"</code></pre></div>\n<p>Publishing accounts are by invitation for now.</p>\n")
     try foot(out)
 
