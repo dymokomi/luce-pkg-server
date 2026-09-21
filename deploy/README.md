@@ -52,9 +52,10 @@ Content-Security-Policy that forbids inline script.
 
 The setgid bit gives new files the `caddy` group, and the unit's `UMask=0027`
 makes them group-readable. The database directory stays `0700`, so the wider
-umask exposes nothing there. Back this directory up together with the database:
-it is derived from repository state, but there is no command yet that rebuilds it,
-and re-pushing an existing tag is a no-op for Git.
+umask exposes nothing there. Back this directory up together with the database by
+passing it as the last argument of `backup.sh`, and restore it with the last
+argument of `restore.sh`: it is derived from repository state, but nothing
+rebuilds it, and re-pushing an existing tag is a no-op for Git.
 
 Never place the token in an argument, repository, log, backup directory, or Caddy
 configuration. Initialize once while the service is stopped:
