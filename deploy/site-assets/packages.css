@@ -55,6 +55,7 @@ pre.source .l:target { background: var(--accent-soft); }
 
 /* Applications and libraries are separate sections of the front page. */
 section.kind { margin-top: 2.5rem; }
+section.kind + p, #no-results + p { margin-top: 2.5rem; }
 section.kind[hidden] { display: none; }
 p.kind-note { margin: .5rem 0 1rem; color: var(--ink-soft); }
 #applications .card { border-left: 3px solid var(--accent); padding-left: .9rem; }
