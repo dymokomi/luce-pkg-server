@@ -27,7 +27,8 @@ Owner decision, September 21, 2026:
   `package.prisma` naming this owner, this repository and this version. The
   registry publishes it as static files (a history-free Git pack, the package
   definition, a per-package `versions` listing with SHA-256 digests, and a global
-  `index`). Released tags cannot be moved or deleted.
+  `index`). Released tags cannot be moved or deleted. The tag must be annotated:
+  its message is the mandatory release notes.
 - Integrity is the SHA-256 recorded in `luc.lock` plus HTTPS. Publisher
   signatures, signing-key enrollment and the separate publish protocol are
   dropped; they may return later as an additional file without changing this model.

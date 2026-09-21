@@ -55,7 +55,7 @@ func member(directory: str, version: str, suffix: str) -> str!:
     return try paths.join(directory, try format(buffer, f"{version}{suffix}"))
 
 ## Step one, before the tag ref is committed: the immutable release files.
-pub func publish_files(site: str, owner: str, name: str, version: str, pack: const u8[], definition: const u8[]) -> !:
+pub func publish_files(site: str, owner: str, name: str, version: str, pack: const u8[], definition: const u8[], notes: const u8[]) -> !:
     let directory = try package_directory(site, owner, name)
     defer strings.release(directory)
     let pack_path = try member(directory, version, ".pack")
@@ -64,6 +64,44 @@ pub func publish_files(site: str, owner: str, name: str, version: str, pack: con
     let definition_path = try member(directory, version, ".prisma")
     defer strings.release(definition_path)
     try immutable(definition_path, definition)
+    let notes_path = try member(directory, version, ".notes")
+    defer strings.release(notes_path)
+    try immutable(notes_path, notes)
+
+## Write one generated page below a package's site directory, creating its parents.
+## `relative` is built only from names pages.addressable accepted.
+pub func write_nested(site: str, owner: str, name: str, relative: str, bytes: const u8[]) -> !:
+    let directory = try package_directory(site, owner, name)
+    defer strings.release(directory)
+    var current = try strings.copy(directory)
+    defer strings.release(current)
+    var start: usize
+    for end in 0..<relative.length:
+        if relative.bytes[end] != '/': continue
+        let next = try paths.join(current, (str)relative.bytes[start..<end])
+        strings.release(current)
+        current = next
+        try ensure_directory(current)
+        start = end + 1
+    let path = try paths.join(current, (str)relative.bytes[start..])
+    defer strings.release(path)
+    let terminated_path = try terminated(path)
+    defer strings.release(terminated_path)
+    try files.write_atomic((c.str)terminated_path, bytes)
+
+## The package list for a registry that has released nothing yet.
+pub func ensure_front_page(site: str) -> !:
+    try ensure_directory(site)
+    let path = try paths.join(site, "index.html")
+    defer strings.release(path)
+    let name = try terminated(path)
+    defer strings.release(name)
+    if files.exists((c.str)name): return
+    let html = try alloc u8[65536] in memory.heap
+    defer free(html) in memory.heap
+    var front = pages.page(html)
+    try pages.index_page(&front, b"")
+    try write_page(site, html[..<front.used])
 
 func render_readme(readme: const u8[], output: u8[]) -> usize!:
     let document = try prism.decode(readme, prism.Codec.markdown)
@@ -206,5 +244,5 @@ pub func publish_listing(site: str, owner: str, name: str, version: str, pack: c
         let listed = try read_listing(versions_path)
         defer discard_listing(listed)
         var detail = pages.page(html)
-        try pages.package_page(&detail, &declared, listed, rendered)
+        try pages.package_page(&detail, &declared, listed, rendered, directory)
         try write_page(directory, html[..<detail.used])

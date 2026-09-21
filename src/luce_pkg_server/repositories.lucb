@@ -579,6 +579,8 @@ pub struct TagRelease:
     pub var pack_size: usize
     pub var definition_size: usize
     pub var readme_size: usize
+    pub var notes_size: usize
+    pub var tree: u8[20]
 
 ## Build the public release of a version tag: a pack holding the tagged commit and its
 ## complete tree (no history), plus that commit's package.prisma. The definition must
@@ -617,12 +619,34 @@ func tree_file(session: prism.Session*, path: str, tree: const u8[], file: str, 
     return blob.payload.length
 
 func tag_release(database: db.Database*, owner: str, name: str, target: const u8[], version: str,
-        pack: u8[], definition: u8[], readme: u8[]) -> TagRelease!:
+        pack: u8[], definition: u8[], readme: u8[], notes: u8[]) -> TagRelease!:
     var path_buffer: u8[192]
     let path = try repo_path(owner, owner, name, path_buffer)
     let snapshot = try database.snapshot()
     defer snapshot.release()
     let session = snapshot.value()
+    var result: TagRelease
+    # Release notes are mandatory: the tag must be annotated and its message is the notes.
+    let tag_value = try checked_object(session, path, target)
+    defer tag_value.release()
+    let tag_object = try git.decode_object(tag_value.value().bytes())
+    if tag_object.kind != "tag": error(prism.invalid, "release: release notes are required; tag with: git tag -a v<version> -m \"what changed\"")
+    let annotated = try git.decode_tag(tag_object.payload)
+    var first: usize = 0
+    var last = annotated.message.length
+    # A signature block is not part of the notes.
+    let armor = "-----BEGIN"
+    for i in 0..<annotated.message.length:
+        if i + armor.length <= annotated.message.length and (str)annotated.message[i..<i + armor.length] == armor and (i == 0 or annotated.message[i - 1] == '\n'):
+            last = i
+            break
+    while first < last and (annotated.message[first] == '\n' or annotated.message[first] == ' ' or annotated.message[first] == '\r' or annotated.message[first] == '\t'): first += 1
+    while last > first and (annotated.message[last - 1] == '\n' or annotated.message[last - 1] == ' ' or annotated.message[last - 1] == '\r' or annotated.message[last - 1] == '\t'): last -= 1
+    if last == first: error(prism.invalid, "release: release notes are required; the tag message is empty")
+    if last - first > notes.length: error(prism.invalid, "release: release notes are too long")
+    for i in first..<last: notes[i - first] = annotated.message[i]
+    result.notes_size = last - first
+
     var commit_id: u8[20]
     var budget: usize = 1048576
     discard(try peel(session, path, target, commit_id, &budget))
@@ -634,8 +658,8 @@ func tag_release(database: db.Database*, owner: str, name: str, target: const u8
     var tree_id: u8[20]
     try git.decode_id(commit.tree, tree_id)
 
-    var result: TagRelease
     discard(try git.hex_id(commit_id, result.commit))
+    for i in 0..<(usize)20: result.tree[i] = tree_id[i]
     let root_value = try checked_object(session, path, tree_id)
     defer root_value.release()
     let root = try git.decode_object(root_value.value().bytes())
@@ -686,6 +710,61 @@ func tag_release(database: db.Database*, owner: str, name: str, target: const u8
         objects[count] = object
     result.pack_size = try git.encode_pack(objects[..<count + 1], pack)
     return result
+
+## Write the browsable source of one release: a page per directory and per file.
+func source_directory(session: prism.Session*, path: str, tree: const u8[], site_root: str, owner: str, name: str,
+        coordinate: str, version: str, location: str, html: u8[], depth: usize, budget: usize*) -> !:
+    if depth > 24: return
+    let value = try checked_object(session, path, tree)
+    defer value.release()
+    let object = try git.decode_object(value.value().bytes())
+    if object.kind != "tree": return
+    let listed = try alloc pages.Listed[1024] in memory.heap
+    defer free(listed) in memory.heap
+    var count: usize
+    var at: usize = 0
+    while at < object.payload.length and count < listed.length:
+        let entry = try git.decode_tree_entry(object.payload[at..])
+        at += entry.consumed
+        if entry.mode == "160000" or entry.mode == "120000": continue
+        let directory = entry.mode == "40000"
+        let linked = pages.addressable(entry.name) and location.length + entry.name.length + 1 < 512
+        var size: usize
+        if *budget == 0: break
+        *budget -= 1
+        var relative: u8[1024]
+        let inner = try format(relative, f"{location}/{entry.name}") if location.length > 0 else try format(relative, f"{entry.name}")
+        if directory:
+            if linked: try source_directory(session, path, entry.id, site_root, owner, name, coordinate, version, inner, html, depth + 1, budget)
+        else:
+            let blob_value = try checked_object(session, path, entry.id)
+            defer blob_value.release()
+            let blob = try git.decode_object(blob_value.value().bytes())
+            size = blob.payload.length
+            if linked:
+                var page = pages.page(html)
+                try pages.blob_page(&page, coordinate, version, inner, blob.payload)
+                var target: u8[1200]
+                try site.write_nested(site_root, owner, name, try format(target, f"{version}/blob/{inner}.html"), html[..<page.used])
+        listed[count] = pages.Listed(name = entry.name, directory = directory, size = size, linked = linked)
+        count += 1
+    var page = pages.page(html)
+    try pages.tree_page(&page, coordinate, version, location, listed[..<count])
+    var target: u8[1200]
+    let index = try format(target, f"{version}/tree/{location}/index.html") if location.length > 0 else try format(target, f"{version}/tree/index.html")
+    try site.write_nested(site_root, owner, name, index, html[..<page.used])
+
+func publish_source(database: db.Database*, site_root: str, owner: str, name: str, version: str, tree: const u8[]) -> !:
+    var path_buffer: u8[192]
+    let path = try repo_path(owner, owner, name, path_buffer)
+    let snapshot = try database.snapshot()
+    defer snapshot.release()
+    let html = try alloc u8[pages.max_page] in memory.heap
+    defer free(html) in memory.heap
+    var title: u8[160]
+    let coordinate = try format(title, f"{owner}/{name}")
+    var budget: usize = 4096
+    try source_directory(snapshot.value(), path, tree, site_root, owner, name, coordinate, version, "", html, 0, &budget)
 
 func push_capabilities(capabilities: str) -> !:
     var start: usize = 0
@@ -774,18 +853,22 @@ pub func receive_pack(database: db.Database*, principal: str, owner: str, name: 
     var definition: u8[65536]
     let readme = try alloc u8[pages.max_readme] in memory.heap
     defer free(readme) in memory.heap
+    var notes: u8[16384]
     for i in 0..<request.count:
         let version = release_version(updates[i].name)
         if version.length == 0: continue
-        let built = try tag_release(database, owner, name, updates[i].target, version, pack, definition, readme)
-        try site.publish_files(site_root, owner, name, version, pack[..<built.pack_size], definition[..<built.definition_size])
+        let built = try tag_release(database, owner, name, updates[i].target, version, pack, definition, readme, notes)
+        try site.publish_files(site_root, owner, name, version, pack[..<built.pack_size], definition[..<built.definition_size], notes[..<built.notes_size])
     try update_refs(database, principal, owner, name, updates[..<request.count])
     for i in 0..<request.count:
         let version = release_version(updates[i].name)
         if version.length == 0: continue
-        let built = try tag_release(database, owner, name, updates[i].target, version, pack, definition, readme)
+        let built = try tag_release(database, owner, name, updates[i].target, version, pack, definition, readme, notes)
         try site.publish_listing(site_root, owner, name, version, pack[..<built.pack_size],
             (str)built.commit[0..], definition[..<built.definition_size], readme[..<built.readme_size])
+        # The source browser is a convenience: a failure there never fails a release.
+        publish_source(database, site_root, owner, name, version, built.tree) catch:
+            recover ()
     return request.count
 
 pub let max_ref_name: usize = 1024

@@ -26,6 +26,15 @@ LUCE_REGISTRY_ORIGIN=https://pkg.luciaos.com
 LUCE_REGISTRY_SITE=/var/lib/luce-pkg-site
 ```
 
+Add `LUCE_REGISTRY_REGISTRATION=closed` once the intended accounts exist. The
+registry then refuses every invitation, including a valid one, so nobody else can
+register until an operator removes the line and restarts the service.
+
+A release is an **annotated** tag: `git tag -a v1.2.0 -m "what changed"`. The tag
+message is the release notes, shown on the package page; a lightweight tag or an
+empty message is refused. Each release also gets a browsable copy of its source
+under `<owner>/<name>/<version>/tree/`.
+
 `LUCE_REGISTRY_SITE` is the directory of public release files. Pushing a tag
 `v<major.minor.patch>` makes the registry write `<owner>/<name>/<version>.pack`,
 `<version>.prisma`, the package's `versions` listing and the global `index` there,

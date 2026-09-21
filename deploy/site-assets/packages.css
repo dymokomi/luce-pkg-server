@@ -14,3 +14,40 @@ article .find input { width: 100%; max-width: 28rem; }
 }
 #readme ~ pre code { padding: 0; background: none; }
 #readme ~ table { display: block; overflow-x: auto; }
+
+/* Releases and their notes. */
+p.release { margin: .25rem 0; color: var(--ink-soft); }
+pre.notes {
+  margin: .75rem 0 1.5rem;
+  padding: .7rem 1rem;
+  white-space: pre-wrap;
+  border-left: 3px solid var(--accent);
+  background: var(--paper-soft);
+}
+
+/* Source browser. */
+p.crumbs { margin: 1rem 0; }
+table.tree td:last-child, table.tree th:last-child { text-align: right; width: 7rem; }
+pre.source {
+  margin: 1rem 0;
+  padding: .8rem 0;
+  overflow-x: auto;
+  counter-reset: line;
+  background: var(--paper-raised);
+  border: 1px solid var(--line-strong);
+}
+pre.source code { padding: 0; background: none; }
+pre.source .l { display: inline-block; min-width: 100%; padding-right: 1rem; }
+pre.source .l::before {
+  counter-increment: line;
+  content: counter(line);
+  display: inline-block;
+  width: 3.5rem;
+  margin-right: 1rem;
+  padding-right: .6rem;
+  text-align: right;
+  color: var(--ink-faint);
+  border-right: 1px solid var(--line-soft);
+  user-select: none;
+}
+pre.source .l:target { background: var(--accent-soft); }

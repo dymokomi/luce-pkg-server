@@ -17,6 +17,7 @@ import http_credentials as transport_auth
 import crypto_native as crypto
 import time
 import rate_limit
+import luce_pkg_server.site as site_files
 import sync
 import prism
 
@@ -215,6 +216,7 @@ struct App:
         let name = field(root, "name") catch: return reply("invalid fields", 400)
         let password = field(root, "password") catch: return reply("invalid fields", 400)
         if not valid_token(code): return reply("invalid invitation", 400)
+        if registration_closed(): return reply("registration is closed", 403)
         if not rate_limit.admit_registration(time.unix()): return rate_limited()
         self.authority.value().accept(code, name, password) catch failure:
             if failure.code == auth.conflict: return reply("registration conflict", 409)
@@ -641,6 +643,10 @@ func configured_origin() -> str!:
         if byte < 33 or byte > 126: error(auth.invalid, "invalid registry origin")
     return origin
 
+## LUCE_REGISTRY_REGISTRATION=closed refuses every invitation, even a valid one.
+func registration_closed() -> bool:
+    return (os.env((c.str)"LUCE_REGISTRY_REGISTRATION") else "") == "closed"
+
 func configured_site() -> str!:
     let site = os.env((c.str)"LUCE_REGISTRY_SITE") else ""
     if site.length > 255: error(auth.invalid, "registry site path exceeds 255 bytes")
@@ -664,6 +670,7 @@ func configure(socket: str) -> interop.Outcome[http.Application]:
     for i in 0..<site.length:
         native.site[i] = site.bytes[i]
     native.site_size = site.length
+    if site.length > 0: site_files.ensure_front_page(site) catch failure: trap(failure.message)
     let app = interop.Reference[App].adopt(native, app_type) catch failure: trap(failure.message)
     defer app.release()
     var router = http.Router() catch failure: trap(failure.message)

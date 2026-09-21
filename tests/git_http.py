@@ -177,12 +177,19 @@ language = "luce-base"
     git('commit', '-qm', 'declare package 1.3.0')
     released = git('rev-parse', 'HEAD').strip().decode()
     git('push', 'origin', 'release-line')
-    git('tag', 'v9.9.9')
+    git('tag', '-a', 'v9.9.9', '-m', 'wrong version')
     rejected = subprocess.run(['git', '-C', str(repo), 'push', 'origin', 'v9.9.9'], env=env, capture_output=True, timeout=90)
     assert rejected.returncode != 0 and b'version must match the release tag' in rejected.stderr, rejected.stderr
     assert not site.exists()
+    # Release notes are mandatory: a lightweight tag and an empty message are refused.
     git('tag', 'v1.3.0')
+    bare = subprocess.run(['git', '-C', str(repo), 'push', 'origin', 'v1.3.0'], env=env, capture_output=True, timeout=90)
+    assert bare.returncode != 0 and b'release notes are required' in bare.stderr, bare.stderr
+    git('tag', '-d', 'v1.3.0')
+    assert not site.exists()
+    git('tag', '-a', 'v1.3.0', '-m', 'First fixture release.\n\n- adds <package.prisma>\n')
     git('push', 'origin', 'v1.3.0')
+    assert (site / '1.3.0.notes').read_text() == 'First fixture release.\n\n- adds <package.prisma>'
     pack = (site / '1.3.0.pack').read_bytes()
     assert (site / '1.3.0.prisma').read_bytes() == (repo / 'package.prisma').read_bytes()
     assert (site / 'versions').read_text() == f'1.3.0 {hashlib.sha256(pack).hexdigest()} {released}\n'
@@ -192,6 +199,11 @@ language = "luce-base"
     detail = (site / 'index.html').read_text()
     assert '<h1>testuser/git-wire</h1>' in detail and 'luc add testuser/git-wire' in detail
     assert hashlib.sha256(pack).hexdigest() in detail and released[:12] in detail
+    assert 'First fixture release.' in detail and '- adds &lt;package.prisma&gt;' in detail
+    listing = (site / '1.3.0/tree/index.html').read_text()
+    assert '/testuser/git-wire/1.3.0/blob/package.prisma.html' in listing and 'large.txt' in listing
+    source = (site / '1.3.0/blob/main.lucb.html').read_text()
+    assert '<span class="l" id="L1">pub func main() -&gt; i32:</span>' in source and 'id="L2"' in source
     unpacked = root / 'release-unpacked'
     subprocess.run(['git', 'init', '-q', str(unpacked)], env=env, check=True, timeout=30)
     subprocess.run(['git', '-C', str(unpacked), 'unpack-objects'], input=pack, env=env, check=True, capture_output=True, timeout=30)

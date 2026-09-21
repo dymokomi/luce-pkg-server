@@ -1,12 +1,19 @@
 ## HTML for the public package site. Markup and class names follow luce.luciaos.com so
 ## the shared stylesheets in /assets apply unchanged. Pages are complete without
 ## JavaScript; assets/packages.js only adds filtering to the index.
+import c
+import files
+import memory
+import paths
 import strings
 import pkg
 import prism
 
 pub let max_page: usize = 2097152
 pub let max_readme: usize = 262144
+pub let max_notes: usize = 16384
+## Larger or binary files are listed in the source browser but not rendered.
+pub let max_source: usize = 524288
 
 pub struct Page:
     var bytes: u8[]
@@ -118,7 +125,16 @@ func safe_links(out: Page*, fragment: str) -> !:
 
 ## One package: description, install command, versions, dependencies and README.
 ## `versions` is the package's `versions` file; `readme` is already-rendered HTML.
-pub func package_page(out: Page*, definition: pkg.Definition*, versions: const u8[], readme: str) -> !:
+func release_notes(directory: str, version: str) -> u8[]!:
+    var name: u8[96]
+    let path = try paths.join(directory, try format(name, f"{version}.notes"))
+    defer strings.release(path)
+    let terminated = try strings.copy(path)
+    defer strings.release(terminated)
+    return try files.read_limit((c.str)terminated, max_notes)
+
+## `directory` is the package's site directory, where each release's notes live.
+pub func package_page(out: Page*, definition: pkg.Definition*, versions: const u8[], readme: str, directory: str) -> !:
     var title: u8[160]
     let coordinate = try format(title, f"{definition.owner}/{definition.name}")
     try head(out, coordinate, definition.description, "/")
@@ -138,8 +154,8 @@ pub func package_page(out: Page*, definition: pkg.Definition*, versions: const u
     try out.put("</code>.</p>\n<h2 id=\"install\">Install<a class=\"anchor\" href=\"#install\" aria-label=\"link to this section\">#</a></h2>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc ")
     try out.put("install " if definition.is_application() else "add ")
     try out.escaped(coordinate)
-    try out.put("</code></pre></div>\n<h2 id=\"versions\">Versions<a class=\"anchor\" href=\"#versions\" aria-label=\"link to this section\">#</a></h2>\n<div class=\"table\"><table><thead><tr><th>Version</th><th>SHA-256</th><th>Commit</th></tr></thead><tbody>\n")
-    # Newest last in the file; show newest first.
+    try out.put("</code></pre></div>\n<h2 id=\"versions\">Versions<a class=\"anchor\" href=\"#versions\" aria-label=\"link to this section\">#</a></h2>\n")
+    # Newest last in the file; show newest first. Each release carries its notes.
     var end = versions.length
     while end > 0:
         var start = end - 1
@@ -148,19 +164,29 @@ pub func package_page(out: Page*, definition: pkg.Definition*, versions: const u
         end = start
         let version = field(line, ' ', 0)
         if version.length == 0: continue
-        try out.put("<tr><td><a href=\"/")
+        let commit = field(line, ' ', 2)
+        try out.put("<h3 id=\"v")
+        try out.escaped(version)
+        try out.put("\">")
+        try out.escaped(version)
+        try out.put("</h3>\n<p class=\"release\"><a href=\"/")
         try out.escaped(coordinate)
         try out.put("/")
         try out.escaped(version)
-        try out.put(".pack\">")
+        try out.put("/tree/\">Browse source</a> &middot; <a href=\"/")
+        try out.escaped(coordinate)
+        try out.put("/")
         try out.escaped(version)
-        try out.put("</a></td><td><code>")
-        try out.escaped(field(line, ' ', 1))
-        try out.put("</code></td><td><code>")
-        let commit = field(line, ' ', 2)
+        try out.put(".pack\">pack</a> &middot; commit <code>")
         try out.escaped((str)commit.bytes[..<12] if commit.length > 12 else commit)
-        try out.put("</code></td></tr>\n")
-    try out.put("</tbody></table></div>\n")
+        try out.put("</code></p>\n<p class=\"release\">SHA-256 <code>")
+        try out.escaped(field(line, ' ', 1))
+        try out.put("</code></p>\n")
+        let notes = release_notes(directory, version) catch: continue
+        defer free(notes) in memory.heap
+        try out.put("<pre class=\"notes\">")
+        try out.escaped((str)notes)
+        try out.put("</pre>\n")
     if definition.dependency_count > 0:
         try out.put("<h2 id=\"dependencies\">Dependencies<a class=\"anchor\" href=\"#dependencies\" aria-label=\"link to this section\">#</a></h2>\n<div class=\"table\"><table><thead><tr><th>Package</th><th>Version</th></tr></thead><tbody>\n")
         for i in 0..<definition.dependency_count:
@@ -180,4 +206,122 @@ pub func package_page(out: Page*, definition: pkg.Definition*, versions: const u
     if readme.length > 0:
         try out.put("<h2 id=\"readme\">Readme<a class=\"anchor\" href=\"#readme\" aria-label=\"link to this section\">#</a></h2>\n")
         try safe_links(out, readme)
+    try foot(out)
+
+# mark: Source browser =========================================================================
+
+## One entry of a directory listing in the source browser.
+pub struct Listed:
+    pub var name: str
+    pub var directory: bool
+    pub var size: usize
+    ## False for names the site cannot safely address; they are listed without a link.
+    pub var linked: bool
+
+## A name is addressable when it is plain enough to be one URL and file-system segment.
+pub func addressable(name: str) -> bool:
+    if name.length == 0 or name.length > 128 or name == "." or name == ".." or name == "index.html": return false
+    for byte in name.bytes:
+        let plain = (byte >= 'a' and byte <= 'z') or (byte >= 'A' and byte <= 'Z') or (byte >= '0' and byte <= '9')
+        if not plain and byte != '.' and byte != '_' and byte != '-': return false
+    return true
+
+func source_head(out: Page*, coordinate: str, version: str, location: str) -> !:
+    var title: u8[512]
+    try head(out, try format(title, f"{coordinate} {version}"), "Source code", "/")
+    try out.put("<div class=\"side\">\n<details class=\"nav\" open>\n<summary>Pages</summary>\n<ul>\n<li><a href=\"/\">Packages</a></li>\n<li><a href=\"/")
+    try out.escaped(coordinate)
+    try out.put("/\">")
+    try out.escaped(coordinate)
+    try out.put("</a></li>\n</ul>\n</details>\n</div>\n<main id=\"content\">\n<article>\n<h1>")
+    try out.escaped(coordinate)
+    try out.put("</h1>\n<p class=\"lede\">Source of release ")
+    try out.escaped(version)
+    try out.put("</p>\n<p class=\"crumbs\"><a href=\"/")
+    try out.escaped(coordinate)
+    try out.put("/")
+    try out.escaped(version)
+    try out.put("/tree/\">")
+    try out.escaped(version)
+    try out.put("</a>")
+    # Breadcrumbs: every directory above `location` links to its listing.
+    var start: usize
+    for end in 0..<location.length + 1:
+        if end != location.length and location.bytes[end] != '/': continue
+        if end > start:
+            try out.put(" / ")
+            if end == location.length:
+                try out.escaped((str)location.bytes[start..<end])
+            else:
+                try out.put("<a href=\"/")
+                try out.escaped(coordinate)
+                try out.put("/")
+                try out.escaped(version)
+                try out.put("/tree/")
+                try out.escaped((str)location.bytes[..<end])
+                try out.put("/\">")
+                try out.escaped((str)location.bytes[start..<end])
+                try out.put("</a>")
+        start = end + 1
+    try out.put("</p>\n")
+
+## A directory listing. `location` is the directory's path, empty for the root.
+pub func tree_page(out: Page*, coordinate: str, version: str, location: str, entries: const Listed[]) -> !:
+    try source_head(out, coordinate, version, location)
+    try out.put("<div class=\"table\"><table class=\"tree\"><thead><tr><th>Name</th><th>Size</th></tr></thead><tbody>\n")
+    for pass in 0..<(usize)2:
+        for entry in entries:
+            if entry.directory != (pass == 0): continue
+            try out.put("<tr><td>")
+            if entry.linked:
+                try out.put("<a href=\"/")
+                try out.escaped(coordinate)
+                try out.put("/")
+                try out.escaped(version)
+                try out.put("/tree/" if entry.directory else "/blob/")
+                if location.length > 0:
+                    try out.escaped(location)
+                    try out.put("/")
+                try out.escaped(entry.name)
+                try out.put("/\">" if entry.directory else ".html\">")
+            try out.escaped(entry.name)
+            if entry.directory: try out.put("/")
+            if entry.linked: try out.put("</a>")
+            try out.put("</td><td>")
+            if not entry.directory:
+                var size: u8[32]
+                try out.put(try format(size, f"{entry.size}"))
+            try out.put("</td></tr>\n")
+    try out.put("</tbody></table></div>\n")
+    try foot(out)
+
+func renderable(content: const u8[]) -> bool:
+    if content.length > max_source: return false
+    for byte in content:
+        if byte == 0: return false
+    return true
+
+## One file, with numbered and addressable lines (#L12).
+pub func blob_page(out: Page*, coordinate: str, version: str, location: str, content: const u8[]) -> !:
+    try source_head(out, coordinate, version, location)
+    if not renderable(content):
+        var size: u8[64]
+        try out.put("<p>")
+        try out.put(try format(size, f"{content.length}"))
+        try out.put(" bytes; binary or too large to show. It is in the release pack.</p>\n")
+        try foot(out)
+        return
+    try out.put("<pre class=\"source\"><code>")
+    var number: usize = 1
+    var start: usize
+    for end in 0..<content.length + 1:
+        if end != content.length and content[end] != '\n': continue
+        if end == content.length and start == end: break
+        var label: u8[48]
+        try out.put(try format(label, f"<span class=\"l\" id=\"L{number}\">"))
+        try out.escaped((str)content[start..<end])
+        try out.put("</span>\n")
+        number += 1
+        start = end + 1
+    try out.put("</code></pre>\n")
     try foot(out)
