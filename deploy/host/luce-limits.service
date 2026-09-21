@@ -1,0 +1,13 @@
+[Unit]
+Description=Per-address connection limits for the public registry
+Before=network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/luce-limits.nft
+ExecStop=/usr/sbin/nft delete table inet luce_limits
+
+[Install]
+WantedBy=multi-user.target

@@ -94,6 +94,22 @@ the backend therefore enforces explicit 15-second idle and five-minute
 request/response/application deadlines, while Caddy enforces the body cap plus
 five-minute upstream response-header and five-second dial deadlines.
 
+## Abuse and bandwidth limits
+
+`deploy/host/` holds what runs on the VPS itself, outside the registry:
+
+- `luce-limits.nft` with `luce-limits.service`: per-address limits in the kernel,
+  before Caddy. New HTTP(S) connections are limited to 30 a second (burst 120) and
+  64 simultaneous connections per address; SSH to 20 new connections a minute.
+  Install the rules as `/etc/luce-limits.nft`.
+- `luce-egress-budget.sh` with its service and five-minute timer, installed as
+  `/usr/local/sbin/luce-egress-budget`: counts the month's transfer (in and out,
+  as Lightsail bills it) in `/var/lib/luce-egress/usage` and shapes egress with
+  `tc cake` at 200 Mbit, then 20 Mbit from 70% of the budget, 1 Mbit from 90% and
+  256 kbit from 97%. The default budget is 2800 GiB against the plan's 3 TB, so
+  the transfer bill is bounded by construction. The site slows down; it does not
+  go offline and it does not run up overage.
+
 ## Backup and restore
 
 Backups deliberately require service downtime. Stop the registry, run `backup.sh`

@@ -1,0 +1,10 @@
+[Unit]
+Description=Re-evaluate the monthly transfer budget every five minutes
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=5min
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

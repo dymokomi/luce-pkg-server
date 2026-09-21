@@ -1,0 +1,33 @@
+#!/usr/sbin/nft -f
+# Per-address limits for the public registry, enforced in the kernel before Caddy.
+# The Lightsail firewall already restricts inbound traffic to ports 22, 80 and 443.
+table inet luce_limits
+delete table inet luce_limits
+
+table inet luce_limits {
+	set web_rate4 { type ipv4_addr; size 65535; flags dynamic; timeout 1m; }
+	set web_rate6 { type ipv6_addr; size 65535; flags dynamic; timeout 1m; }
+	set web_open4 { type ipv4_addr; size 65535; flags dynamic; }
+	set web_open6 { type ipv6_addr; size 65535; flags dynamic; }
+	set ssh_rate4 { type ipv4_addr; size 65535; flags dynamic; timeout 5m; }
+	set ssh_rate6 { type ipv6_addr; size 65535; flags dynamic; timeout 5m; }
+
+	chain input {
+		type filter hook input priority filter; policy accept;
+		iif "lo" accept
+		ct state established,related accept
+
+		# New HTTP(S) connections: 30 a second per address, bursts to 120.
+		tcp dport { 80, 443 } ct state new update @web_rate4 { ip saddr limit rate over 30/second burst 120 packets } drop
+		tcp dport { 80, 443 } ct state new update @web_rate6 { ip6 saddr limit rate over 30/second burst 120 packets } drop
+		# At most 64 simultaneous connections per address.
+		tcp dport { 80, 443 } ct state new add @web_open4 { ip saddr ct count over 64 } reject with tcp reset
+		tcp dport { 80, 443 } ct state new add @web_open6 { ip6 saddr ct count over 64 } reject with tcp reset
+		udp dport 443 update @web_rate4 { ip saddr limit rate over 600/second burst 1200 packets } drop
+		udp dport 443 update @web_rate6 { ip6 saddr limit rate over 600/second burst 1200 packets } drop
+
+		# SSH: 20 new connections a minute per address.
+		tcp dport 22 ct state new update @ssh_rate4 { ip saddr limit rate over 20/minute burst 20 packets } drop
+		tcp dport 22 ct state new update @ssh_rate6 { ip6 saddr limit rate over 20/minute burst 20 packets } drop
+	}
+}

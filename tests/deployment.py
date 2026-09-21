@@ -26,6 +26,7 @@ assert "script-src 'self'" in caddy and "unsafe-inline" not in caddy
 for asset in ('core.css', 'style.css', 'packages.css', 'site.js', 'theme.js', 'packages.js', 'mark.svg'):
     assert (ROOT / 'deploy/site-assets' / asset).is_file()
 assert 'ReadWritePaths=/var/lib/luce-pkg-server /var/lib/luce-pkg-site' in service and 'UMask=0027' in service
+subprocess.run(['bash', '-n', ROOT / 'deploy/host/luce-egress-budget.sh'], check=True)
 for script in ('backup.sh', 'restore.sh'):
     subprocess.run(['bash', '-n', ROOT / 'deploy' / script], check=True)
 subprocess.run(['bash', '-n', ROOT / 'deploy' / 'build-release.sh'], check=True)

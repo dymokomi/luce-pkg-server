@@ -1,0 +1,7 @@
+[Unit]
+Description=Shape egress to stay inside the monthly transfer allowance
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/luce-egress-budget
