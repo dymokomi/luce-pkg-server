@@ -1,0 +1,76 @@
+#prisma 4.0
+def package "luce-pkg-server" {
+    str owner = "dymokomi"
+    str version = "0.1.0"
+    str language = "luce-base"
+    str description = "Public implementation tracker and future Luce package/Git registry application. MIT OR Apache-2.0. Application composition will be Luce; database, authentication, cryptography, Git and package internals will be Luce Base."
+    str readme = "README.md"
+
+    def export "registry" {
+        str module = "luce_pkg_server.registry"
+    }
+
+    def export "admin" {
+        str module = "luce_pkg_server.admin"
+    }
+
+    def export "repositories" {
+        str module = "luce_pkg_server.repositories"
+    }
+
+    def export "http_credentials" {
+        str module = "luce_pkg_server.http_auth"
+    }
+
+    def export "rate_limit" {
+        str module = "luce_pkg_server.rate_limit"
+    }
+
+    def dependency "luce-server" {
+        str owner = "dymokomi"
+        str version = "^0.1.0"
+        str path = "../luce-server"
+    }
+
+    def dependency "luce-db" {
+        str owner = "dymokomi"
+        str version = "^0.1.0"
+        str path = "../luce-db"
+    }
+
+    def dependency "luce-auth" {
+        str owner = "dymokomi"
+        str version = "^0.1.0"
+        str path = "../luce-auth"
+    }
+
+    def dependency "luce-json" {
+        str owner = "dymokomi"
+        str version = "^0.2.0"
+        str path = "../luce-json"
+    }
+
+    def dependency "luce-prism" {
+        str owner = "dymokomi"
+        str version = "^0.1.0"
+        str path = "../luce-prism"
+    }
+
+    def dependency "luce-git" {
+        str owner = "dymokomi"
+        str version = "^0.1.0"
+        str path = "../luce-git"
+    }
+
+    def dependency "luce-crypto" {
+        str owner = "dymokomi"
+        str version = "^0.1.0"
+        str path = "../luce-crypto"
+    }
+
+    def dependency "luce-pkg" {
+        str owner = "dymokomi"
+        str version = "^0.1.0"
+        str path = "../luce-pkg"
+    }
+}
