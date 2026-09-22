@@ -172,7 +172,7 @@ language = "luce-base"
     site = root / 'site' / 'testuser' / 'git-wire'
     git('checkout', '-q', '-b', 'release-line')
     (repo / 'package.prisma').write_text('#prisma 4.0\ndef package "git-wire" {\n    str owner = "testuser"\n'
-        '    str version = "1.3.0"\n    str language = "luce-base"\n    str description = "Release fixture"\n}\n')
+        '    str version = "1.3.0"\n    str kind = "package"\n    str language = "luce-base"\n    str description = "Release fixture"\n}\n')
     git('add', 'package.prisma')
     git('commit', '-qm', 'declare package 1.3.0')
     released = git('rev-parse', 'HEAD').strip().decode()

@@ -154,12 +154,9 @@ pub func ensure_front_page(site: str) -> !:
         try ensure_directory(directory_of_view)
         try write_page(directory_of_view, html[..<kind_page.used])
 
-## Until package.prisma declares its kind: a desktop bundle is an application, any other
-## program is a tool, and the rest are packages.
+## The kind a package declares: application, tool or package.
 func kind_of(declared: pkg.Definition*) -> str:
-    if declared.is_bundled(): return "application"
-    if declared.is_application(): return "tool"
-    return "package"
+    return declared.kind
 
 func render_readme(readme: const u8[], output: u8[]) -> usize!:
     let document = try prism.decode(readme, prism.Codec.markdown)
