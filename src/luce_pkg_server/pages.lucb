@@ -229,9 +229,10 @@ pub func package_page(out: Page*, definition: pkg.Definition*, versions: const u
     var title: u8[160]
     let coordinate = try format(title, f"{definition.owner}/{definition.name}")
     try head(out, coordinate, definition.description, "/")
-    try out.put("<div class=\"side\">\n<details class=\"nav\" open>\n<summary>Pages</summary>\n<ul>\n<li><a href=\"/\">Packages</a></li>\n</ul>\n</details>\n<details class=\"nav\" open>\n<summary>On this page</summary>\n<ul>\n<li class=\"h2\"><a href=\"#install\">Install</a></li><li class=\"h2\"><a href=\"#versions\">Versions</a></li>")
+    try out.put("<div class=\"side\">\n<details class=\"nav\" open>\n<summary>Pages</summary>\n<ul>\n<li><a href=\"/\">Packages</a></li>\n</ul>\n</details>\n<details class=\"nav\" open>\n<summary>On this page</summary>\n<ul>\n<li class=\"h2\"><a href=\"#install\">Install</a></li>")
+    if readme.length > 0: try out.put("<li class=\"h2\"><a href=\"#readme\">Documentation</a></li>")
     if definition.dependency_count > 0: try out.put("<li class=\"h2\"><a href=\"#dependencies\">Dependencies</a></li>")
-    if readme.length > 0: try out.put("<li class=\"h2\"><a href=\"#readme\">Readme</a></li>")
+    try out.put("<li class=\"h2\"><a href=\"#versions\">Versions</a></li>")
     try out.put("\n</ul>\n</details>\n</div>\n<main id=\"content\">\n<article>\n<h1>")
     try out.escaped(coordinate)
     try out.put("</h1>\n<p class=\"lede\">")
@@ -245,7 +246,27 @@ pub func package_page(out: Page*, definition: pkg.Definition*, versions: const u
     try out.put("</code>.</p>\n<h2 id=\"install\">Install<a class=\"anchor\" href=\"#install\" aria-label=\"link to this section\">#</a></h2>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc ")
     try out.put("install " if definition.is_application() else "add ")
     try out.escaped(coordinate)
-    try out.put("</code></pre></div>\n<h2 id=\"versions\">Versions<a class=\"anchor\" href=\"#versions\" aria-label=\"link to this section\">#</a></h2>\n")
+    try out.put("</code></pre></div>\n")
+    if readme.length > 0:
+        try out.put("<h2 id=\"readme\">Documentation<a class=\"anchor\" href=\"#readme\" aria-label=\"link to this section\">#</a></h2>\n")
+        try safe_links(out, readme)
+    if definition.dependency_count > 0:
+        try out.put("<h2 id=\"dependencies\">Dependencies<a class=\"anchor\" href=\"#dependencies\" aria-label=\"link to this section\">#</a></h2>\n<div class=\"table\"><table><thead><tr><th>Package</th><th>Version</th></tr></thead><tbody>\n")
+        for i in 0..<definition.dependency_count:
+            let item = try definition.dependency_at(i)
+            try out.put("<tr><td><a href=\"/")
+            try out.escaped(item.owner)
+            try out.put("/")
+            try out.escaped(item.name)
+            try out.put("/\">")
+            try out.escaped(item.owner)
+            try out.put("/")
+            try out.escaped(item.name)
+            try out.put("</a></td><td><code>")
+            try out.escaped(item.version)
+            try out.put("</code></td></tr>\n")
+        try out.put("</tbody></table></div>\n")
+    try out.put("<h2 id=\"versions\">Versions<a class=\"anchor\" href=\"#versions\" aria-label=\"link to this section\">#</a></h2>\n")
     # Newest last in the file; show newest first. Each release carries its notes.
     var end = versions.length
     while end > 0:
@@ -278,25 +299,6 @@ pub func package_page(out: Page*, definition: pkg.Definition*, versions: const u
         try out.put("<pre class=\"notes\">")
         try out.escaped((str)notes)
         try out.put("</pre>\n")
-    if definition.dependency_count > 0:
-        try out.put("<h2 id=\"dependencies\">Dependencies<a class=\"anchor\" href=\"#dependencies\" aria-label=\"link to this section\">#</a></h2>\n<div class=\"table\"><table><thead><tr><th>Package</th><th>Version</th></tr></thead><tbody>\n")
-        for i in 0..<definition.dependency_count:
-            let item = try definition.dependency_at(i)
-            try out.put("<tr><td><a href=\"/")
-            try out.escaped(item.owner)
-            try out.put("/")
-            try out.escaped(item.name)
-            try out.put("/\">")
-            try out.escaped(item.owner)
-            try out.put("/")
-            try out.escaped(item.name)
-            try out.put("</a></td><td><code>")
-            try out.escaped(item.version)
-            try out.put("</code></td></tr>\n")
-        try out.put("</tbody></table></div>\n")
-    if readme.length > 0:
-        try out.put("<h2 id=\"readme\">Readme<a class=\"anchor\" href=\"#readme\" aria-label=\"link to this section\">#</a></h2>\n")
-        try safe_links(out, readme)
     try foot(out)
 
 # mark: Source browser =========================================================================
