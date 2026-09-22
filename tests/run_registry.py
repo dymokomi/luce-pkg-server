@@ -39,7 +39,6 @@ def main():
         run([args.base.resolve(), "build", ROOT / "tests/http_auth.lucb", *flags, "-o", output / "http-auth"])
         run([args.base.resolve(), "build", ROOT / "tests/rate_limit.lucb", *flags, "-o", output / "rate-limit"])
         run([args.base.resolve(), "build", ROOT / "tests/account_fixture.lucb", *flags, "-o", output / "account-fixture"])
-        run([args.base.resolve(), "build", ROOT / "tests/client/native_transfer.lucb", *flags, "-o", output / "native-transfer"])
         # Unoptimized generated C executes the complete native ML-DSA/Argon2
         # integration matrix substantially more slowly than the native backend.
         # Hosted x86-64 Linux has exceeded seven minutes after completing Git,
@@ -48,7 +47,7 @@ def main():
         timeout = 600 if mode == "c" else 240
         run([output / "http-auth"])
         run([output / "rate-limit"])
-        run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/check_accounts.py"), output / "registry", output / "account-fixture", output / "native-transfer"], timeout=timeout)
+        run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/check_accounts.py"), output / "registry", output / "account-fixture"], timeout=timeout)
         run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/admin.py"), output / "admin", output / "registry"], timeout=timeout)
         run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/deployment.py"), output / "admin"], timeout=timeout)
         print(f"PASS {mode}", flush=True)

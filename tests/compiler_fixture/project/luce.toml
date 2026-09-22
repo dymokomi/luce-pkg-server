@@ -1,6 +1,0 @@
-[package]
-name = "profile_project"
-source = "src"
-
-[dependencies]
-profile_wrapper = "../wrapper"

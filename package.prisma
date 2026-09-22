@@ -1,10 +1,10 @@
 #prisma 4.0
 def package "luce-pkg-server" {
     str owner = "dymokomi"
-    str version = "0.1.1"
+    str version = "0.2.0"
     str kind = "package"
     str language = "luce-base"
-    str description = "Public implementation tracker and future Luce package/Git registry application. MIT OR Apache-2.0. Application composition will be Luce; database, authentication, cryptography, Git and package internals will be Luce Base."
+    str description = "The registry behind pkg.luciaos.com: a Git host and package index for Luce and Luce Base."
     str readme = "README.md"
 
     def export "registry" {

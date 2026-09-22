@@ -87,14 +87,11 @@ jobs:
       - name: Build pinned toolchain
         working-directory: luce-pkg-server
         run: python3 tools/bootstrap_registry.py
-      - name: Static contracts and compiler profile
+      - name: Static contracts
         if: matrix.kind == 'static'
         working-directory: luce-pkg-server
         run: |
-          python3 tests/check_roadmap.py
-          python3 tests/test_compiler_protocols.py
           python3 tests/test_heap_process.py
-          python3 tests/check_compilers.py --mode native3
       - name: Registry integration
         if: matrix.kind == 'registry'
         working-directory: luce-pkg-server

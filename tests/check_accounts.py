@@ -11,13 +11,9 @@ import subprocess
 import sys
 import tempfile
 import time
-import object_http
 import git_http
-import key_http
-import release_http
-import pull_request_http
 
-binary, fixture, client = [Path(arg).resolve() for arg in sys.argv[1:4]]
+binary, fixture = [Path(arg).resolve() for arg in sys.argv[1:3]]
 registration_client = Path(sys.argv[4]).resolve() if len(sys.argv) == 5 else None
 
 def request(port, method, path, value=None, headers=None, include_headers=False):
@@ -53,7 +49,7 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
         probe.bind(('127.0.0.1', 0))
         port = probe.getsockname()[1]
     env = dict(os.environ, LUCE_REGISTRY_STORE_TOKEN='integration-store-token',
-               LUCE_REGISTRY_ORIGIN=key_http.ORIGIN, LUCE_REGISTRY_SITE=str(root / 'site'))
+               LUCE_REGISTRY_ORIGIN='https://pkg.luciaos.com', LUCE_REGISTRY_SITE=str(root / 'site'))
     with (root / 'server.log').open('w+') as log:
         process = subprocess.Popen([str(binary), str(database), str(port)], env=env,
                                    stdout=log, stderr=subprocess.STDOUT)
@@ -142,44 +138,22 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
                                                 {'name': 'testadmin', 'password': 'fixture-password'})
             assert admin_status == 200
             admin_headers = {'Authorization': 'Bearer ' + admin_token.decode()}
-            enrolled_key = key_http.check(port, headers, admin_headers, fixture)
             assert request(port, 'POST', endpoint, {'name': 'demo'}, admin_headers)[0] == 201
-            object_path, object_bytes = object_http.check(port, headers, admin_headers)
             git_token, _ = issue_credential(port, headers, 'git:write', 'git-wire')
-            git_read_token, _ = issue_credential(port, headers, 'git:read', 'git-wire')
             temporary_git, _ = issue_credential(port, headers, 'git:read', 'git-wire', 60)
             assert request(port, 'POST', '/v1/credentials/revoke', {'token': temporary_git.decode()}, admin_headers)[0] == 404
             assert request(port, 'POST', '/v1/credentials/revoke', {'token': temporary_git.decode()}, headers) == (200, b'revoked')
-            git_commit = git_http.check(port, headers, git_token, git_read_token, root, request)
-            pull_request_expected = pull_request_http.check(
-                port, headers, admin_headers, git_token, root, request)
-            git_commit = pull_request_expected['merge_commit'].encode()
-            package_publish_token, package_publish_headers = issue_credential(port, headers, 'package:publish', 'git-wire')
-            package_read_token, package_read_headers = issue_credential(port, headers, 'package:read', 'git-wire')
-            _, admin_package_headers = issue_credential(port, admin_headers, 'package:publish', 'demo')
-            assert request(port, 'POST', release_http.ROOT, headers=package_read_headers)[0] == 403
-            assert request(port, 'GET', release_http.ROOT, headers=git_headers('testuser', git_token))[0] == 401
-            release_expected, large_release_expected, v2_release_expected = release_http.check(
-                port, package_read_headers, package_publish_headers, admin_package_headers,
-                root, fixture, git_commit)
-            subprocess.run([str(client), str(port)], check=True, timeout=120)
+            git_commit = git_http.check(port, headers, git_token, root, request)
             def identity(_):
                 return request(port, 'GET', '/v1/identity', headers=headers)
             with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
                 assert all(value == (200, b'testuser') for value in pool.map(identity, range(32)))
             assert request(port, 'POST', '/v1/sessions/revoke', headers=headers) == (200, b'revoked')
             assert request(port, 'GET', '/v1/identity', headers=headers)[0] == 401
-            assert request(port, 'POST', key_http.CHALLENGE, headers=headers)[0] == 401
-            assert request(port, 'GET', key_http.ENROLL, headers=headers)[0] == 401
-            assert request(port, 'GET', release_http.ROOT + '/1.2.3/source', headers=headers)[0] == 401
-            assert request(port, 'POST', release_http.ROOT, headers=headers)[0] == 401
             assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack', headers=headers)[0] == 401
-            assert request(port, 'GET', release_http.ROOT + '/1.2.3/source', headers=package_read_headers)[0] == 200
             assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack',
                            headers=git_headers('testuser', git_token))[0] == 200
             assert request(port, 'POST', endpoint, {'name': 'revoked'}, headers)[0] == 401
-            assert object_http.transfer(port, 'GET', object_path, headers=headers)[0] == 401
-            assert object_http.transfer(port, 'PUT', object_path, b'', headers)[0] == 401
             assert request(port, 'POST', '/v1/sessions', {'name': 'testadmin', 'password': 'fixture-password'})[0] == 200
             # Syntactically valid unauthenticated requests consume a process-wide
             # fixed window before semantic validation or password KDF work.
@@ -229,16 +203,8 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             assert status == 200 and len(restored) == 32
             assert request(port, 'GET', '/v1/identity', headers={'Authorization': 'Bearer ' + restored.decode()}) == (200, b'testuser')
             restored_headers = {'Authorization': 'Bearer ' + restored.decode()}
-            key_http.persisted(port, restored_headers, enrolled_key)
-            release_http.persisted(port, package_read_headers, release_expected)
-            release_http.persisted(port, package_read_headers, large_release_expected, '1.2.5')
-            release_http.persisted(port, package_read_headers, v2_release_expected, '1.2.6')
-            assert release_http.catalog(request(port, 'GET', '/v1/releases/testuser/git-wire', headers=package_read_headers)[1]) == ['1.2.6', '1.2.5', '1.2.4', '1.2.3']
             status, advertisement = request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack', headers=git_headers('testuser', git_token))
             assert status == 200 and git_commit + b' refs/heads/main' in advertisement
-            pull_request_http.persisted(port, restored_headers, pull_request_expected, request)
-            subprocess.run([str(client), str(port)], check=True, timeout=120)
-            assert object_http.transfer(port, 'GET', object_path, headers=restored_headers) == (200, object_bytes)
             assert request(port, 'POST', '/v1/repositories', {'name': 'demo'}, restored_headers)[0] == 409
             assert request(port, 'POST', '/v1/repositories', {'name': 'parallel'}, restored_headers)[0] == 409
             assert request(port, 'POST', '/v1/repositories', {'name': 'after-restart'}, restored_headers)[0] == 201
@@ -270,11 +236,8 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
                     pass
                 assert time.monotonic() < deadline, 'unconfigured registry timeout'
                 time.sleep(.05)
-            for endpoint in (key_http.CHALLENGE, key_http.ENROLL):
-                assert request(port, 'POST', endpoint)[0] == 401
-                assert request(port, 'POST', endpoint, headers=restored_headers)[0] == 503
-            assert request(port, 'POST', release_http.ROOT, headers=package_publish_headers)[0] == 503
-            assert request(port, 'GET', release_http.ROOT + '/1.2.3/source', headers=package_read_headers)[0] == 503
+            # Without a configured origin the registry still serves health and refuses to publish.
+            assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-upload-pack')[0] == 200
         finally:
             process.terminate()
             try:

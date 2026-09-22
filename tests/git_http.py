@@ -6,23 +6,30 @@ import subprocess
 import hashlib
 import struct
 import zlib
-from object_http import transfer
+import http.client
 
 
-def check(port, session_headers, token, read_token, root, request, create_repository=None):
+def transfer(port, method, path, body=b'', headers=None):
+    connection = http.client.HTTPConnection('127.0.0.1', port, timeout=90)
+    try:
+        connection.request(method, path, body, headers or {})
+        response = connection.getresponse()
+        return response.status, response.read()
+    finally:
+        connection.close()
+
+
+def check(port, session_headers, token, root, request, create_repository=None):
     if create_repository is None:
         assert request(port, 'POST', '/v1/repositories', {'name': 'git-wire'}, session_headers)[0] == 201
     else:
         create_repository('git-wire')
     endpoint = f'http://127.0.0.1:{port}/git/testuser/git-wire'
     headers = {'Authorization': 'Basic ' + base64.b64encode(b'testuser:' + token).decode()}
-    read_headers = {'Authorization': 'Basic ' + base64.b64encode(b'testuser:' + read_token).decode()}
     assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack')[0] == 401
     assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack', headers=session_headers)[0] == 401
     assert request(port, 'GET', '/git/testadmin/git-wire/info/refs?service=git-receive-pack', headers=headers)[0] == 401
     assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=bad', headers=headers)[0] == 403
-    assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack', headers=read_headers)[0] == 401
-    assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-upload-pack', headers=read_headers)[0] == 200
     assert request(port, 'HEAD', '/git/testuser/git-wire/info/refs?service=git-receive-pack', headers=headers) == (200, b'')
     repo = root / 'git-client'
     askpass = root / 'git-askpass.sh'

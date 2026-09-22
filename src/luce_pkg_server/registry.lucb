@@ -11,7 +11,6 @@ import strings
 import repositories
 import git
 import memory
-import account_identity as keys
 import pkg
 import http_credentials as transport_auth
 import crypto_native as crypto
@@ -154,49 +153,6 @@ struct App:
         discard(view)
         return reply("ok")
 
-    func key_challenge(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
-        let token = bearer(view.value()) catch: return reply("unauthorized", 401)
-        let who = self.authority.value().verify(token) catch: return reply("unauthorized", 401)
-        defer who.release()
-        if self.origin_size == 0: return reply("key enrollment unavailable", 503)
-        let body = view.value().body() catch: return reply("invalid body", 400)
-        defer body.release()
-        let payload = body.value().bytes(1) catch: return reply("invalid body", 400)
-        if payload.length != 0: return reply("invalid body", 400)
-        let nonce = self.authority.value().key_challenge(token, (str)self.origin[..<self.origin_size]) catch failure:
-            if failure.code == auth.conflict: return reply("key enrollment conflict", 409)
-            return reply("challenge unavailable", 503)
-        defer nonce.release()
-        return binary_reply(nonce.value().bytes(), "application/octet-stream")
-
-    func read_key(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
-        let token = bearer(view.value()) catch: return reply("unauthorized", 401)
-        let who = self.authority.value().verify(token) catch: return reply("unauthorized", 401)
-        defer who.release()
-        let result = self.authority.value().signing_key(token) catch: return reply("key unavailable", 503)
-        let key = result else return reply("no signing key", 404)
-        defer key.release()
-        return binary_reply(key.value().bytes(), "application/octet-stream")
-
-    func enroll_key(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
-        let request = view.value()
-        let token = bearer(request) catch: return reply("unauthorized", 401)
-        let who = self.authority.value().verify(token) catch: return reply("unauthorized", 401)
-        defer who.release()
-        if self.origin_size == 0: return reply("key enrollment unavailable", 503)
-        let content_type = (request.header("Content-Type") catch: return reply("invalid headers", 400)) else ""
-        if content_type != "application/octet-stream": return reply("unsupported content type", 415)
-        let body = request.body() catch: return reply("invalid body", 400)
-        defer body.release()
-        let payload = body.value().bytes(5261) catch: return reply("invalid body", 400)
-        if payload.length != 5261: return reply("invalid body", 400)
-        self.authority.value().enroll_key(token, (str)self.origin[..<self.origin_size], payload[..<1952], payload[1952..]) catch failure:
-            if failure.code == auth.conflict: return reply("key enrollment conflict", 409)
-            if failure.code == auth.invalid or failure.code == keys.invalid or failure.code == auth.missing:
-                return reply("invalid key proof", 400)
-            return reply("enrollment unavailable", 503)
-        return reply("enrolled", 201)
-
     func identity(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
         let token = bearer(view.value()) catch: return reply("unauthorized", 401)
         let who = self.authority.value().verify(token) catch: return reply("unauthorized", 401)
@@ -303,215 +259,6 @@ struct App:
             if failure.code == auth.conflict: return reply("repository conflict", 409)
             return reply("repository creation failed", 503)
         return reply("created", 201)
-
-    func pull_request_collection(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
-        let request = view.value()
-        let token = bearer(request) catch: return reply("unauthorized", 401)
-        let who = self.authority.value().verify(token) catch: return reply("unauthorized", 401)
-        defer who.release()
-        let principal = who.value().text_at() catch: return reply("internal error", 500)
-        let owner = request.parameter("owner") else return reply("invalid path", 400)
-        let name = request.parameter("name") else return reply("invalid path", 400)
-        if owner != principal: return reply("forbidden", 403)
-        if not repositories.valid_name(name): return reply("invalid repository", 400)
-        if request.method() == "POST":
-            let body = request.body() catch: return reply("invalid body", 400)
-            defer body.release()
-            let payload = body.value().bytes(12288) catch: return reply("invalid body", 400)
-            let document = json.decode((str)payload, 12288) catch: return reply("invalid JSON", 400)
-            defer document.release()
-            let root = document.value().root()
-            if root.kind() != json.Kind.object or root.length() != 4: return reply("invalid fields", 400)
-            let base = field(root, "base") catch: return reply("invalid fields", 400)
-            let head = field(root, "head") catch: return reply("invalid fields", 400)
-            let title = field(root, "title") catch: return reply("invalid fields", 400)
-            let description = field(root, "body") catch: return reply("invalid fields", 400)
-            let number = repositories.create_pull_request(self.database.value(), principal, owner, name,
-                base, head, title, description) catch failure:
-                if failure.code == auth.missing: return reply("repository or branch not found", 404)
-                if failure.code == auth.conflict: return reply("pull request conflict", 409)
-                if failure.code == auth.invalid or failure.code == git.invalid or failure.code == json.invalid:
-                    return reply("invalid pull request", 400)
-                return reply("pull request storage unavailable", 503)
-            var record: repositories.PullRequest
-            repositories.get_pull_request(self.database.value(), principal, owner, name, number, &record) catch:
-                return reply("pull request committed; readback unavailable", 503)
-            let response = pull_request_document(&record) catch: return reply("internal error", 500)
-            defer response.release()
-            return json_reply(response, 201)
-        let records = alloc repositories.PullRequest[repositories.max_pull_requests] in memory.heap catch:
-            return reply("internal error", 500)
-        defer free(records) in memory.heap
-        let count = repositories.list_pull_requests(self.database.value(), principal, owner, name, records) catch failure:
-            if failure.code == auth.missing: return reply("repository not found", 404)
-            return reply("pull request storage unavailable", 503)
-        let result = json.Value.array(4194304) catch: return reply("internal error", 500)
-        defer result.release()
-        for i in 0..<count:
-            let item = pull_request_document(&records[i]) catch: return reply("internal error", 500)
-            defer item.release()
-            result.value().append(item) catch: return reply("internal error", 500)
-        return json_reply(result)
-
-    func pull_request_item(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
-        let request = view.value()
-        let token = bearer(request) catch: return reply("unauthorized", 401)
-        let who = self.authority.value().verify(token) catch: return reply("unauthorized", 401)
-        defer who.release()
-        let principal = who.value().text_at() catch: return reply("internal error", 500)
-        let owner = request.parameter("owner") else return reply("invalid path", 400)
-        let name = request.parameter("name") else return reply("invalid path", 400)
-        let encoded = request.parameter("number") else return reply("invalid path", 400)
-        if owner != principal: return reply("forbidden", 403)
-        if not repositories.valid_name(name): return reply("invalid repository", 400)
-        let number = positive_number(encoded, (i64)repositories.max_pull_requests) catch:
-            return reply("invalid pull request number", 400)
-        if request.method() == "POST":
-            let body = request.body() catch: return reply("invalid body", 400)
-            defer body.release()
-            let payload = body.value().bytes(128) catch: return reply("invalid body", 400)
-            let document = json.decode((str)payload, 128) catch: return reply("invalid JSON", 400)
-            defer document.release()
-            let root = document.value().root()
-            if root.kind() != json.Kind.object or root.length() != 1: return reply("invalid fields", 400)
-            let state_text = field(root, "state") catch: return reply("invalid fields", 400)
-            var state = repositories.PullRequestState.unknown
-            if state_text == "open": state = .open
-            elif state_text == "closed": state = .closed
-            elif state_text == "merged": state = .merged
-            else: return reply("invalid pull request state", 400)
-            repositories.set_pull_request_state(self.database.value(), principal, owner, name, number, state) catch failure:
-                if failure.code == auth.missing: return reply("pull request or branch not found", 404)
-                if failure.code == auth.conflict: return reply("pull request state conflict", 409)
-                if failure.code == auth.invalid or failure.code == git.invalid: return reply("invalid pull request", 400)
-                return reply("pull request storage unavailable", 503)
-        var record: repositories.PullRequest
-        repositories.get_pull_request(self.database.value(), principal, owner, name, number, &record) catch failure:
-            if failure.code == auth.missing: return reply("pull request not found", 404)
-            return reply("pull request storage unavailable", 503)
-        let response = pull_request_document(&record) catch: return reply("internal error", 500)
-        defer response.release()
-        return json_reply(response)
-
-    func object(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
-        let request = view.value()
-        let token = bearer(request) catch: return reply("unauthorized", 401)
-        let who = self.authority.value().verify(token) catch: return reply("unauthorized", 401)
-        defer who.release()
-        let principal = who.value().text_at() catch: return reply("internal error", 500)
-        let owner = request.parameter("owner") else return reply("invalid path", 400)
-        let name = request.parameter("name") else return reply("invalid path", 400)
-        let encoded = request.parameter("id") else return reply("invalid path", 400)
-        if owner != principal: return reply("forbidden", 403)
-        if not repositories.valid_name(name): return reply("invalid repository", 400)
-        var id: u8[20]
-        discard(git.decode_id(encoded, id) catch: return reply("invalid object id", 400))
-        if request.method() == "PUT":
-            let body = request.body() catch: return reply("invalid body", 400)
-            defer body.release()
-            let wire = body.value().bytes((i64)repositories.max_object_bytes) catch: return reply("invalid body", 400)
-            let decoded = git.decode_object(wire) catch: return reply("invalid Git object", 400)
-            var actual: u8[20]
-            discard(git.hash_object(decoded.kind, decoded.payload, actual) catch: return reply("invalid Git object", 400))
-            for i in 0..<(usize)20:
-                if id[i] != actual[i]: return reply("object id mismatch", 400)
-            repositories.put_object(self.database.value(), principal, owner, name, wire, actual) catch failure:
-                if failure.code == auth.missing: return reply("repository not found", 404)
-                if failure.code == auth.invalid: return reply("invalid object", 400)
-                if failure.code == auth.conflict: return reply("object conflict", 409)
-                return reply("object storage unavailable", 503)
-            return reply(encoded)
-        let value = repositories.get_object(self.database.value(), principal, owner, name, id) catch failure:
-            if failure.code == auth.missing: return reply("object not found", 404)
-            return reply("object storage unavailable", 503)
-        defer value.release()
-        return binary_reply(value.value().bytes(), "application/octet-stream")
-
-    func release_upload(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
-        let request = view.value()
-        let owner = request.parameter("owner") else return reply("invalid path", 400)
-        let name = request.parameter("name") else return reply("invalid path", 400)
-        if not repositories.valid_name(name): return reply("invalid repository", 400)
-        let token = credential_bearer(request) catch: return reply("unauthorized", 401)
-        let who = self.authority.value().authorize_credential(token, auth.scope_package_publish, owner, name) catch: return reply("forbidden", 403)
-        defer who.release()
-        let principal = who.value().text_at() catch: return reply("internal error", 500)
-        if self.origin_size == 0: return reply("release publication unavailable", 503)
-        let content_type = (request.header("Content-Type") catch: return reply("invalid headers", 400)) else ""
-        if content_type != "application/octet-stream": return reply("unsupported content type", 415)
-        let body = request.body() catch: return reply("invalid body", 400)
-        defer body.release()
-        let size = body.value().size()
-        if size < 8 + 50 + 3309 or size > (i64)max_release_upload: return reply("invalid upload size", 400)
-        # Body.bytes is capped at64MiB; chunk reads preserve the full64MiB pack
-        # allowance plus its bounded signature/metadata envelope without language changes.
-        let wire = alloc u8[(usize)size] in memory.heap catch: return reply("upload memory unavailable", 503)
-        defer free(wire) in memory.heap
-        var used: usize = 0
-        while used < wire.length:
-            let chunk = body.value().read() catch: return reply("invalid upload body", 400)
-            if chunk.length == 0 or chunk.length > wire.length - used: return reply("invalid upload body", 400)
-            for i in 0..<chunk.length: wire[used + i] = chunk[i]
-            used += chunk.length
-        if (str)wire[..<4] != "LRP1" or wire[6] != 0 or wire[7] != 0: return reply("invalid upload schema", 400)
-        let metadata_size = (usize)wire[4] | ((usize)wire[5] << 8)
-        if metadata_size < 50 or metadata_size > 24576 or metadata_size + 8 + 3309 > wire.length:
-            return reply("invalid upload framing", 400)
-        let metadata = wire[8..<8 + metadata_size]
-        let signature = wire[8 + metadata_size..<8 + metadata_size + 3309]
-        let source = wire[8 + metadata_size + 3309..]
-        # Recheck after body acquisition; transport receives/spools before dispatch.
-        let current = self.authority.value().authorize_credential(token, auth.scope_package_publish, owner, name) catch: return reply("unauthorized", 401)
-        defer current.release()
-        let current_principal = current.value().text_at() catch: return reply("unauthorized", 401)
-        if current_principal != principal: return reply("unauthorized", 401)
-        let created = repositories.publish_release(self.database.value(), principal, owner, name,
-            (str)self.origin[..<self.origin_size], metadata, signature, source) catch failure:
-            if failure.code == auth.conflict: return reply("release conflict", 409)
-            if failure.code == auth.missing: return reply("repository or commit not found", 404)
-            if failure.code == auth.invalid or failure.code == pkg.invalid or failure.code == git.invalid:
-                return reply("invalid signed release", 400)
-            return reply("release storage unavailable", 503)
-        return reply("published" if created else "unchanged", 201 if created else 200)
-
-    func release_download(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
-        let request = view.value()
-        let owner = request.parameter("owner") else return reply("invalid path", 400)
-        let name = request.parameter("name") else return reply("invalid path", 400)
-        let version = request.parameter("version") else return reply("invalid path", 400)
-        let part = request.parameter("part") else return reply("invalid path", 400)
-        if not repositories.valid_name(name): return reply("invalid repository", 400)
-        let token = credential_bearer(request) catch: return reply("unauthorized", 401)
-        let who = self.authority.value().authorize_credential(token, auth.scope_package_read, owner, name) catch: return reply("forbidden", 403)
-        defer who.release()
-        let principal = who.value().text_at() catch: return reply("internal error", 500)
-        discard(pkg.parse_version(version) catch: return reply("invalid version", 400))
-        if part != "metadata" and part != "signature" and part != "publisher_key" and part != "source":
-            return reply("invalid release component", 400)
-        if self.origin_size == 0: return reply("release download unavailable", 503)
-        let value = repositories.get_release(self.database.value(), principal, owner, name,
-            (str)self.origin[..<self.origin_size], version, part) catch failure:
-            if failure.code == auth.missing: return reply("release not found", 404)
-            return reply("release verification unavailable", 503)
-        defer value.release()
-        return binary_reply(value.value().bytes(), "application/octet-stream")
-
-    func release_versions(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
-        let request = view.value()
-        let owner = request.parameter("owner") else return reply("invalid path", 400)
-        let name = request.parameter("name") else return reply("invalid path", 400)
-        if not repositories.valid_name(name): return reply("invalid repository", 400)
-        let token = credential_bearer(request) catch: return reply("unauthorized", 401)
-        let who = self.authority.value().authorize_credential(token, auth.scope_package_read, owner, name) catch: return reply("forbidden", 403)
-        defer who.release()
-        let principal = who.value().text_at() catch: return reply("internal error", 500)
-        if self.origin_size == 0: return reply("release catalog unavailable", 503)
-        var output: u8[64518]
-        let size = repositories.list_versions(self.database.value(), principal, owner, name,
-            (str)self.origin[..<self.origin_size], output) catch failure:
-            if failure.code == auth.missing: return reply("repository not found", 404)
-            return reply("release catalog unavailable", 503)
-        return binary_reply(output[..<size], "application/vnd.luce.versions")
 
     func git_http(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
         let request = view.value()
@@ -685,15 +432,6 @@ func configure(socket: str) -> interop.Outcome[http.Application]:
     let identity = http.Handler.bind(app, App.identity) catch failure: trap(failure.message)
     defer identity.release()
     router.get("/v1/identity", identity) catch failure: trap(failure.message)
-    let key_challenge = http.Handler.bind(app, App.key_challenge) catch failure: trap(failure.message)
-    defer key_challenge.release()
-    router.post("/v1/identity/key-challenge", key_challenge) catch failure: trap(failure.message)
-    let enroll_key = http.Handler.bind(app, App.enroll_key) catch failure: trap(failure.message)
-    defer enroll_key.release()
-    router.post("/v1/identity/key", enroll_key) catch failure: trap(failure.message)
-    let read_key = http.Handler.bind(app, App.read_key) catch failure: trap(failure.message)
-    defer read_key.release()
-    router.get("/v1/identity/key", read_key) catch failure: trap(failure.message)
     let redeem = http.Handler.bind(app, App.redeem) catch failure: trap(failure.message)
     defer redeem.release()
     router.post("/v1/invites/redeem", redeem) catch failure: trap(failure.message)
@@ -712,27 +450,6 @@ func configure(socket: str) -> interop.Outcome[http.Application]:
     let create_repository = http.Handler.bind(app, App.create_repository) catch failure: trap(failure.message)
     defer create_repository.release()
     router.post("/v1/repositories", create_repository) catch failure: trap(failure.message)
-    let pull_request_collection = http.Handler.bind(app, App.pull_request_collection) catch failure: trap(failure.message)
-    defer pull_request_collection.release()
-    router.get("/v1/repositories/{owner}/{name}/pull-requests", pull_request_collection) catch failure: trap(failure.message)
-    router.post("/v1/repositories/{owner}/{name}/pull-requests", pull_request_collection) catch failure: trap(failure.message)
-    let pull_request_item = http.Handler.bind(app, App.pull_request_item) catch failure: trap(failure.message)
-    defer pull_request_item.release()
-    router.get("/v1/repositories/{owner}/{name}/pull-requests/{number}", pull_request_item) catch failure: trap(failure.message)
-    router.post("/v1/repositories/{owner}/{name}/pull-requests/{number}", pull_request_item) catch failure: trap(failure.message)
-    let object = http.Handler.bind(app, App.object) catch failure: trap(failure.message)
-    defer object.release()
-    router.put("/v1/repositories/{owner}/{name}/objects/{id}", object) catch failure: trap(failure.message)
-    router.get("/v1/repositories/{owner}/{name}/objects/{id}", object) catch failure: trap(failure.message)
-    let release_upload = http.Handler.bind(app, App.release_upload) catch failure: trap(failure.message)
-    defer release_upload.release()
-    router.post("/v1/releases/{owner}/{name}", release_upload) catch failure: trap(failure.message)
-    let release_versions = http.Handler.bind(app, App.release_versions) catch failure: trap(failure.message)
-    defer release_versions.release()
-    router.get("/v1/releases/{owner}/{name}", release_versions) catch failure: trap(failure.message)
-    let release_download = http.Handler.bind(app, App.release_download) catch failure: trap(failure.message)
-    defer release_download.release()
-    router.get("/v1/releases/{owner}/{name}/{version}/{part}", release_download) catch failure: trap(failure.message)
     let git_http = http.Handler.bind(app, App.git_http) catch failure: trap(failure.message)
     defer git_http.release()
     router.get("/git/{owner}/{name}/info/refs", git_http) catch failure: trap(failure.message)
