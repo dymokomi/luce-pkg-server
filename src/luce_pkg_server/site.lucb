@@ -297,7 +297,19 @@ pub func publish_listing(site: str, owner: str, name: str, version: str, pack: c
         defer strings.release(directory_of_view)
         try ensure_directory(directory_of_view)
         try write_page(directory_of_view, html[..<kind_page.used])
-    if latest_text == version:
+    if latest_text == version: try write_package_page(site, owner, name, definition, readme)
+
+## The package page describes the latest release; also rebuilt at registry start.
+pub func write_package_page(site: str, owner: str, name: str, definition: const u8[], readme: const u8[]) -> !:
+    var declared = try pkg.decode_package(definition)
+    defer declared.close()
+    let directory = try package_directory(site, owner, name)
+    defer strings.release(directory)
+    let versions_path = try paths.join(directory, "versions")
+    defer strings.release(versions_path)
+    let html = try alloc u8[pages.max_page] in memory.heap
+    defer free(html) in memory.heap
+    if true:
         let fragment = try alloc u8[pages.max_page] in memory.heap
         defer free(fragment) in memory.heap
         var rendered_size: usize = 0

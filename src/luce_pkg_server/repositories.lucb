@@ -778,7 +778,8 @@ pub func regenerate_site(database: db.Database*, site_root: str) -> !:
         if listing[end] != '\n': continue
         let line = (str)listing[start..<end]
         start = end + 1
-        let (coordinate, _) = strings.split_once(line, "\t") else continue
+        let (coordinate, after) = strings.split_once(line, "\t") else continue
+        let (latest, _) = strings.split_once(after, "\t") else continue
         let (owner, name) = strings.split_once(coordinate, "/") else continue
         var relative: u8[300]
         let versions_path = try paths.join(site_root, try format(relative, f"{coordinate}/versions"))
@@ -794,10 +795,10 @@ pub func regenerate_site(database: db.Database*, site_root: str) -> !:
             line_start = line_end + 1
             let (version, rest) = strings.split_once(entry, " ") else continue
             let (_, commit_text) = strings.split_once(rest, " ") else continue
-            regenerate_release(database, site_root, owner, name, version, strings.trim(commit_text)) catch:
+            regenerate_release(database, site_root, owner, name, version, strings.trim(commit_text), version == latest) catch:
                 recover ()
 
-func regenerate_release(database: db.Database*, site_root: str, owner: str, name: str, version: str, commit_text: str) -> !:
+func regenerate_release(database: db.Database*, site_root: str, owner: str, name: str, version: str, commit_text: str, latest: bool) -> !:
     var path_buffer: u8[192]
     let path = try repo_path(owner, owner, name, path_buffer)
     let snapshot = try database.snapshot()
@@ -810,6 +811,17 @@ func regenerate_release(database: db.Database*, site_root: str, owner: str, name
     let commit = try git.decode_commit(object.payload)
     var tree: u8[20]
     try git.decode_id(commit.tree, tree)
+    if latest:
+        var definition: u8[65536]
+        let definition_size = try tree_file(snapshot.value(), path, tree, "package.prisma", definition)
+        if definition_size > 0:
+            var declared = try pkg.decode_package(definition[..<definition_size])
+            defer declared.close()
+            let readme = try alloc u8[pages.max_readme] in memory.heap
+            defer free(readme) in memory.heap
+            var readme_size: usize = 0
+            if declared.readme.length > 0: readme_size = try tree_file(snapshot.value(), path, tree, declared.readme, readme)
+            try site.write_package_page(site_root, owner, name, definition[..<definition_size], readme[..<readme_size])
     try publish_source(database, site_root, owner, name, version, tree)
 
 func publish_source(database: db.Database*, site_root: str, owner: str, name: str, version: str, tree: const u8[]) -> !:
