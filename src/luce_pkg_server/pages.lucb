@@ -194,9 +194,16 @@ pub func index_page(out: Page*, listing: const u8[], view: str = "") -> !:
     try out.put("<p>The Luce Package Index is a repository of applications, tools and packages for the <a href=\"https://luce.luciaos.com\">Luce</a> and <a href=\"https://luce-base.luciaos.com\">Luce Base</a> programming languages.</p>\n<h2 id=\"installing\">Installing<a class=\"anchor\" href=\"#installing\" aria-label=\"link to this section\">#</a></h2>\n<p>Everything here is fetched and built by <code>luc</code>, which comes with Luce. Get it once, on macOS or Linux:</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">curl -fsSL https://luce.luciaos.com/install.sh | sh</code></pre></div>\n<p>On Windows, in PowerShell: <code>irm https://luce.luciaos.com/install.ps1 | iex</code>. Already have it? <code>luc update</code> brings luc and both compilers to the latest release.</p>\n<p>Then install an application or a tool. It is built from source on your machine:</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc install owner/name</code></pre></div>\n<p>Add a package to your project. <code>luc</code> resolves its dependencies and records exact versions and checksums in <code>luc.lock</code>:</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc add owner/name</code></pre></div>\n<p>Every release keeps its source, which you can browse here or clone with Git.</p>\n")
     try foot(out)
 
-## Only absolute web links and in-page anchors survive from a README; anything else,
-## including javascript: and relative paths that do not exist here, becomes "#".
-func safe_links(out: Page*, fragment: str) -> !:
+## An image name the release's raw files serve as-is.
+pub func image_name(name: str) -> bool:
+    for suffix in [".png", ".jpg", ".jpeg", ".gif", ".svg", ".webp"]:
+        if strings.ends_with(name, suffix): return true
+    return false
+
+## Links in a README: absolute web links and in-page anchors pass through; a relative
+## path points into this release's own source (an image as a raw file, anything else as
+## its source page); everything else, including javascript:, becomes "#".
+func safe_links(out: Page*, fragment: str, coordinate: str, version: str) -> !:
     var at: usize
     while at < fragment.length:
         var attribute = ""
@@ -208,11 +215,37 @@ func safe_links(out: Page*, fragment: str) -> !:
             continue
         var end = at + attribute.length
         while end < fragment.length and fragment.bytes[end] != '"': end += 1
-        let value = (str)fragment.bytes[at + attribute.length..<end]
-        let allowed = strings.starts_with(value, "https://") or strings.starts_with(value, "http://") or (attribute == " href=\"" and strings.starts_with(value, "#"))
+        var value = (str)fragment.bytes[at + attribute.length..<end]
         try out.put(attribute)
-        try out.put(value if allowed else "#")
+        if strings.starts_with(value, "https://") or strings.starts_with(value, "http://") or (attribute == " href=\"" and strings.starts_with(value, "#")):
+            try out.put(value)
+        elif relative_path(value):
+            if strings.starts_with(value, "./"): value = (str)value.bytes[2..]
+            try out.put("/")
+            try out.escaped(coordinate)
+            try out.put("/")
+            try out.escaped(version)
+            let raw = image_name(value) or attribute == " src=\""
+            try out.put("/raw/" if raw else "/blob/")
+            try out.escaped(value)
+            if not raw: try out.put(".html")
+        else:
+            try out.put("#")
         at = end
+
+## A plain relative path: no scheme, no `..`, no leading slash, no query or fragment.
+func relative_path(value: str) -> bool:
+    if value.length == 0 or value.length > 512 or value.bytes[0] == '/' or value.bytes[0] == '#': return false
+    var start: usize
+    for end in 0..<value.length + 1:
+        if end != value.length:
+            let byte = value.bytes[end]
+            if byte == ':' or byte == '?' or byte == '\\' or byte < 0x20 or byte == '"' or byte == '\'': return false
+            if byte != '/': continue
+        let part = (str)value.bytes[start..<end]
+        if part.length == 0 or part == "..": return false
+        start = end + 1
+    return true
 
 ## One package: description, install command, versions, dependencies and README.
 ## `versions` is the package's `versions` file; `readme` is already-rendered HTML.
@@ -253,7 +286,7 @@ pub func package_page(out: Page*, definition: pkg.Definition*, versions: const u
         try out.put("</code></pre></div>\n")
     if readme.length > 0:
         try out.put("<h2 id=\"readme\">Documentation<a class=\"anchor\" href=\"#readme\" aria-label=\"link to this section\">#</a></h2>\n")
-        try safe_links(out, readme)
+        try safe_links(out, readme, coordinate, definition.version)
     if definition.dependency_count > 0:
         try out.put("<h2 id=\"dependencies\">Dependencies<a class=\"anchor\" href=\"#dependencies\" aria-label=\"link to this section\">#</a></h2>\n<div class=\"table\"><table><thead><tr><th>Package</th><th>Version</th></tr></thead><tbody>\n")
         for i in 0..<definition.dependency_count:

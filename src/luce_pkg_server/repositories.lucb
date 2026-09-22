@@ -523,6 +523,10 @@ func source_directory(session: prism.Session*, path: str, tree: const u8[], site
             defer blob_value.release()
             let blob = try git.decode_object(blob_value.value().bytes())
             size = blob.payload.length
+            # Images are also kept as raw files, so a README can show them.
+            if linked and pages.image_name(entry.name) and size <= 4194304:
+                var raw_target: u8[1200]
+                try site.write_nested(site_root, owner, name, try format(raw_target, f"{version}/raw/{inner}"), blob.payload)
             if linked:
                 var page = pages.page(html)
                 try pages.blob_page(&page, coordinate, version, inner, blob.payload)

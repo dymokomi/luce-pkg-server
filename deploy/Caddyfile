@@ -34,9 +34,9 @@ pkg.luciaos.com {
 		header @pack Content-Type "application/octet-stream"
 		@text path /index */versions *.prisma
 		header @text Content-Type "text/plain; charset=utf-8"
-		@release path_regexp \.(pack|prisma)$
+		@release path_regexp (\.(pack|prisma)$|/raw/)
 		header @release Cache-Control "public, max-age=31536000, immutable"
-		@listing not path_regexp \.(pack|prisma)$
+		@listing not path_regexp (\.(pack|prisma)$|/raw/)
 		header @listing Cache-Control "public, max-age=60"
 		file_server
 	}

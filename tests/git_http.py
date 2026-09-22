@@ -179,8 +179,11 @@ language = "luce-base"
     site = root / 'site' / 'testuser' / 'git-wire'
     git('checkout', '-q', '-b', 'release-line')
     (repo / 'package.prisma').write_text('#prisma 4.0\ndef package "git-wire" {\n    str owner = "testuser"\n'
-        '    str version = "1.3.0"\n    str kind = "package"\n    str language = "luce-base"\n    str description = "Release fixture"\n}\n')
-    git('add', 'package.prisma')
+        '    str version = "1.3.0"\n    str kind = "package"\n    str language = "luce-base"\n    str description = "Release fixture"\n    str readme = "README.md"\n}\n')
+    (repo / 'docs').mkdir()
+    (repo / 'docs/shot.png').write_bytes(b'\x89PNG fixture')
+    (repo / 'README.md').write_text('# git-wire\n\n![shot](docs/shot.png) and [notes](docs/notes.md) and [bad](javascript:alert(1))\n')
+    git('add', 'package.prisma', 'docs', 'README.md')
     git('commit', '-qm', 'declare package 1.3.0')
     released = git('rev-parse', 'HEAD').strip().decode()
     git('push', 'origin', 'release-line')
@@ -210,6 +213,8 @@ language = "luce-base"
     assert '<h1>testuser/git-wire</h1>' in detail and 'luc add testuser/git-wire' in detail
     assert hashlib.sha256(pack).hexdigest() in detail and released[:12] in detail
     assert 'First fixture release.' in detail and '- adds &lt;package.prisma&gt;' in detail
+    assert '<img src="/testuser/git-wire/1.3.0/raw/docs/shot.png"' in detail and 'href="/testuser/git-wire/1.3.0/blob/docs/notes.md.html"' in detail and 'href="#">bad' in detail
+    assert (site / '1.3.0/raw/docs/shot.png').read_bytes() == b'\x89PNG fixture'
     listing = (site / '1.3.0/tree/index.html').read_text()
     assert '/testuser/git-wire/1.3.0/blob/package.prisma.html' in listing and 'large.txt' in listing
     source = (site / '1.3.0/blob/main.lucb.html').read_text()
