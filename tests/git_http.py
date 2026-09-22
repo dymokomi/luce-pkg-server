@@ -196,7 +196,7 @@ language = "luce-base"
     assert (root / 'site' / 'index').read_text() == 'testuser/git-wire\t1.3.0\tRelease fixture\tpackage\n'
     front = (root / 'site' / 'index.html').read_text()
     assert '<a class="card" href="/testuser/git-wire/">' in front and 'Release fixture' in front
-    assert 'Find, install and publish Luce packages' in front and '0 applications &middot; 0 tools &middot; 1 package</p>' in front and '<a href="/tools/">Tools</a>' in front and '<section class="kind" id="packages">' in front and '<a href="/applications/">Applications</a>' in front
+    assert 'Find and install Luce packages' in front and '0 applications &middot; 0 tools &middot; 1 package</p>' in front and '<a href="/tools/">Tools</a>' in front and '<section class="kind" id="packages">' in front and '<a href="/applications/">Applications</a>' in front
     assert '<a class="here" href="/packages/">Packages</a>' in (root / 'site' / 'packages' / 'index.html').read_text()
     assert True and 'id="applications"' not in front
     detail = (site / 'index.html').read_text()

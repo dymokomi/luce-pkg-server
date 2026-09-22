@@ -115,8 +115,8 @@ pub func index_page(out: Page*, listing: const u8[], view: str = "") -> !:
     var only: usize = 3
     for i in 0..<(usize)3:
         if view == kind_pages[i]: only = i
-    let heading = kind_titles[only] if only < 3 else "Find, install and publish Luce packages"
-    try head(out, heading if only < 3 else "Luce Package Index", "Find, install and publish applications, tools and packages for Luce and Luce Base.", "/", view)
+    let heading = kind_titles[only] if only < 3 else "Find and install Luce packages"
+    try head(out, heading if only < 3 else "Luce Package Index", "Find and install applications, tools and packages for Luce and Luce Base.", "/", view)
     var counts: usize[3]
     var start: usize
     for end in 0..<listing.length:
@@ -145,7 +145,7 @@ pub func index_page(out: Page*, listing: const u8[], view: str = "") -> !:
             try out.put("\">")
             try out.put(kind_titles[i])
             try out.put("</a></li>")
-        try out.put("<li class=\"h2\"><a href=\"#installing\">Installing</a></li><li class=\"h2\"><a href=\"#publishing\">Publishing</a></li>\n</ul>\n</details>\n")
+        try out.put("<li class=\"h2\"><a href=\"#installing\">Installing</a></li>\n</ul>\n</details>\n")
     try out.put("</div>\n<main id=\"content\">\n<article>\n<h1>")
     try out.put(heading)
     try out.put("</h1>\n<div class=\"find\"><input id=\"filter\" type=\"search\" placeholder=\"Search ")
@@ -191,7 +191,7 @@ pub func index_page(out: Page*, listing: const u8[], view: str = "") -> !:
     if only < 3:
         try foot(out)
         return
-    try out.put("<p>The Luce Package Index is a repository of applications, tools and packages for the <a href=\"https://luce.luciaos.com\">Luce</a> and <a href=\"https://luce-base.luciaos.com\">Luce Base</a> programming languages.</p>\n<h2 id=\"installing\">Installing<a class=\"anchor\" href=\"#installing\" aria-label=\"link to this section\">#</a></h2>\n<p>Install an application or a tool. It is built from source on your machine:</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc install owner/name</code></pre></div>\n<p>Add a package to your project. <code>luc</code> resolves its dependencies and records exact versions and checksums in <code>luc.lock</code>:</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc add owner/name</code></pre></div>\n<p><code>luc</code> comes with the <a href=\"https://luce.luciaos.com\">Luce installer</a>.</p>\n<h2 id=\"publishing\">Publishing<a class=\"anchor\" href=\"#publishing\" aria-label=\"link to this section\">#</a></h2>\n<p>Authors publish a version from their project with release notes. Every release keeps its source, which you can browse here or clone with Git:</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc publish -m \"What changed in this version\"</code></pre></div>\n<p>Publishing accounts are by invitation for now.</p>\n")
+    try out.put("<p>The Luce Package Index is a repository of applications, tools and packages for the <a href=\"https://luce.luciaos.com\">Luce</a> and <a href=\"https://luce-base.luciaos.com\">Luce Base</a> programming languages.</p>\n<h2 id=\"installing\">Installing<a class=\"anchor\" href=\"#installing\" aria-label=\"link to this section\">#</a></h2>\n<p>Install an application or a tool. It is built from source on your machine:</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc install owner/name</code></pre></div>\n<p>Add a package to your project. <code>luc</code> resolves its dependencies and records exact versions and checksums in <code>luc.lock</code>:</p>\n<div class=\"code\"><button class=\"copy\" type=\"button\">copy</button><pre><code class=\"language-sh\">luc add owner/name</code></pre></div>\n<p><code>luc</code> comes with the <a href=\"https://luce.luciaos.com\">Luce installer</a>.</p>\n<p>Every release keeps its source, which you can browse here or clone with Git.</p>\n")
     try foot(out)
 
 ## Only absolute web links and in-page anchors survive from a README; anything else,
