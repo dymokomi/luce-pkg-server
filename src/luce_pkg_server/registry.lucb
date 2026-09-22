@@ -674,6 +674,7 @@ func configure(socket: str) -> interop.Outcome[http.Application]:
         native.site[i] = site.bytes[i]
     native.site_size = site.length
     if site.length > 0: site_files.ensure_front_page(site) catch failure: trap(failure.message)
+    if site.length > 0: repositories.regenerate_site(native.database.value(), site) catch failure: trap(failure.message)
     let app = interop.Reference[App].adopt(native, app_type) catch failure: trap(failure.message)
     defer app.release()
     var router = http.Router() catch failure: trap(failure.message)

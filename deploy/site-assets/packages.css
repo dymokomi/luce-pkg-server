@@ -38,6 +38,7 @@ pre.source {
   border: 1px solid var(--line-strong);
 }
 pre.source code { padding: 0; background: none; }
+pre.source .d { color: var(--tok-decl); }
 pre.source .l { display: inline-block; min-width: 100%; padding-right: 1rem; }
 pre.source .l::before {
   counter-increment: line;

@@ -392,6 +392,111 @@ func renderable(content: const u8[]) -> bool:
         if byte == 0: return false
     return true
 
+# mark: Syntax highlighting ====================================================================
+# A small line lexer that emits the token classes the shared stylesheet already styles:
+# c comment, s string, n number, k keyword, t type, d declaration name, b builtin.
+
+let luce_keywords: str[46] = ["and", "as", "break", "catch", "class", "const", "continue", "defer", "elif", "else", "enum", "errdefer", "extern", "for", "from", "func", "if", "import", "in", "init", "interface", "is", "let", "match", "mutating", "new", "not", "or", "pub", "recover", "return", "self", "spawn", "static", "struct", "test", "try", "type", "var", "wait", "while", "with", "alloc", "free", "discard", "trap"]
+let luce_types: str[27] = ["int", "float", "bool", "str", "bytes", "unit", "never", "list", "map", "set", "Error", "ErrorCode", "Weak", "task", "char", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize", "isize", "f32", "f64"]
+let luce_constants: str[3] = ["true", "false", "none"]
+let c_keywords: str[36] = ["auto", "break", "case", "const", "continue", "default", "do", "else", "enum", "extern", "for", "goto", "if", "inline", "register", "restrict", "return", "sizeof", "static", "struct", "switch", "typedef", "union", "volatile", "while", "def", "class", "import", "from", "pass", "lambda", "yield", "fn", "use", "mod", "impl"]
+let c_types: str[16] = ["void", "char", "short", "int", "long", "float", "double", "signed", "unsigned", "bool", "size_t", "uint8_t", "uint16_t", "uint32_t", "uint64_t", "int64_t"]
+
+## How a file is highlighted, from its name.
+enum Syntax as u8:
+    plain = 0
+    luce = 1
+    hash_comments = 2
+    slash_comments = 3
+    prisma = 4
+
+pub func syntax_for(name: str) -> Syntax:
+    var dot = name.length
+    for i in 0..<name.length:
+        if name.bytes[i] == '.': dot = i
+    if dot == name.length: return Syntax.hash_comments if name == "Makefile" else Syntax.plain
+    let ext = (str)name.bytes[dot + 1..]
+    if ext == "luc" or ext == "lucb": return Syntax.luce
+    if ext == "prisma" or ext == "prism": return Syntax.prisma
+    if ext == "py" or ext == "sh" or ext == "toml" or ext == "yml" or ext == "yaml" or ext == "rb" or ext == "nft" or ext == "service" or ext == "timer": return Syntax.hash_comments
+    if ext == "c" or ext == "h" or ext == "cpp" or ext == "hpp" or ext == "cc" or ext == "js" or ext == "ts" or ext == "rs" or ext == "go" or ext == "zig" or ext == "java" or ext == "swift" or ext == "css" or ext == "m": return Syntax.slash_comments
+    return Syntax.plain
+
+func word_byte(byte: u8) -> bool:
+    return (byte >= 'a' and byte <= 'z') or (byte >= 'A' and byte <= 'Z') or (byte >= '0' and byte <= '9') or byte == '_'
+
+func listed(word: str, words: const str[]) -> bool:
+    for candidate in words:
+        if candidate == word: return true
+    return false
+
+func span(out: Page*, token: str, text: str) -> !:
+    try out.put("<span class=\"")
+    try out.put(token)
+    try out.put("\">")
+    try out.escaped(text)
+    try out.put("</span>")
+
+## Highlight one line. Strings and comments do not span lines here, which is what the
+## languages in question mostly do; a rare multi-line string is shown plainly after its
+## first line.
+pub func highlight(out: Page*, line: str, syntax: Syntax) -> !:
+    if syntax == Syntax.plain:
+        try out.escaped(line)
+        return
+    var at: usize
+    var plain_start: usize
+    var previous = ""
+    while at < line.length:
+        let byte = line.bytes[at]
+        # comments
+        let hashed = byte == '#' and syntax != Syntax.slash_comments
+        let slashes = byte == '/' and at + 1 < line.length and line.bytes[at + 1] == '/' and syntax == Syntax.slash_comments
+        if hashed or slashes:
+            try out.escaped((str)line.bytes[plain_start..<at])
+            try span(out, "c", (str)line.bytes[at..])
+            return
+        # strings
+        if byte == '"' or byte == '\'':
+            var end = at + 1
+            while end < line.length and line.bytes[end] != byte:
+                if line.bytes[end] == '\\' and end + 1 < line.length: end += 1
+                end += 1
+            if end < line.length: end += 1
+            try out.escaped((str)line.bytes[plain_start..<at])
+            try span(out, "s", (str)line.bytes[at..<end])
+            at = end
+            plain_start = at
+            continue
+        # numbers and words
+        if word_byte(byte) and (at == 0 or not word_byte(line.bytes[at - 1])):
+            var end = at
+            while end < line.length and (word_byte(line.bytes[end]) or (line.bytes[end] == '.' and byte >= '0' and byte <= '9')): end += 1
+            let word = (str)line.bytes[at..<end]
+            var token = ""
+            if byte >= '0' and byte <= '9': token = "n"
+            elif syntax == Syntax.luce:
+                if listed(word, luce_keywords): token = "k"
+                elif listed(word, luce_types) or listed(word, luce_constants): token = "t"
+                elif previous == "func" or previous == "struct" or previous == "class" or previous == "enum" or previous == "interface" or previous == "type": token = "d"
+                elif byte >= 'A' and byte <= 'Z': token = "t"
+            elif syntax == Syntax.prisma:
+                if word == "def" or word == "over" or word == "connect" or word == "reference" or word == "delete" or word == "unset": token = "k"
+                elif previous == "def" or previous == "over": token = "t"
+                elif word == "str" or word == "bool" or word == "int64" or word == "uint64" or word == "float64" or word == "float32" or word == "int32" or word == "true" or word == "false": token = "t"
+            else:
+                if listed(word, c_keywords): token = "k"
+                elif listed(word, c_types) or word == "true" or word == "false" or word == "None" or word == "null": token = "t"
+            if token.length > 0:
+                try out.escaped((str)line.bytes[plain_start..<at])
+                try span(out, token, word)
+                plain_start = end
+            previous = word
+            at = end
+            continue
+        at += 1
+    try out.escaped((str)line.bytes[plain_start..])
+
 ## One file, with numbered and addressable lines (#L12).
 pub func blob_page(out: Page*, coordinate: str, version: str, location: str, content: const u8[]) -> !:
     try source_head(out, coordinate, version, location)
@@ -402,7 +507,8 @@ pub func blob_page(out: Page*, coordinate: str, version: str, location: str, con
         try out.put(" bytes; binary or too large to show. It is in the release pack.</p>\n")
         try foot(out)
         return
-    try out.put("<pre class=\"source\"><code>")
+    let syntax = syntax_for(paths.base(location))
+    try out.put("<pre class=\"source code\"><code>")
     var number: usize = 1
     var start: usize
     for end in 0..<content.length + 1:
@@ -410,7 +516,7 @@ pub func blob_page(out: Page*, coordinate: str, version: str, location: str, con
         if end == content.length and start == end: break
         var label: u8[48]
         try out.put(try format(label, f"<span class=\"l\" id=\"L{number}\">"))
-        try out.escaped((str)content[start..<end])
+        try highlight(out, (str)content[start..<end], syntax)
         try out.put("</span>\n")
         number += 1
         start = end + 1

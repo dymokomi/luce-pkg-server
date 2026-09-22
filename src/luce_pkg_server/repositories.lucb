@@ -2,6 +2,9 @@
 ## never from a request field. Ref updates require bounded graph closure; object
 ## uploads alone do not validate graph edges or publish refs.
 import db
+import c
+import files
+import paths
 import prism
 import interop
 import git
@@ -758,6 +761,56 @@ func source_directory(session: prism.Session*, path: str, tree: const u8[], site
     var target: u8[1200]
     let index = try format(target, f"{version}/tree/{location}/index.html") if location.length > 0 else try format(target, f"{version}/tree/index.html")
     try site.write_nested(site_root, owner, name, index, html[..<page.used])
+
+## Regenerate every release's package page and source pages from repository state, so a
+## newer registry's rendering reaches releases published by an older one. Done at start;
+## a failure for one release is skipped, never fatal.
+pub func regenerate_site(database: db.Database*, site_root: str) -> !:
+    let index_path = try paths.join(site_root, "index")
+    defer strings.release(index_path)
+    let index_z = try strings.copy(index_path)
+    defer strings.release(index_z)
+    if not files.exists((c.str)index_z): return
+    let listing = try files.read_limit((c.str)index_z, 4194304)
+    defer free(listing) in memory.heap
+    var start: usize
+    for end in 0..<listing.length:
+        if listing[end] != '\n': continue
+        let line = (str)listing[start..<end]
+        start = end + 1
+        let (coordinate, _) = strings.split_once(line, "\t") else continue
+        let (owner, name) = strings.split_once(coordinate, "/") else continue
+        var relative: u8[300]
+        let versions_path = try paths.join(site_root, try format(relative, f"{coordinate}/versions"))
+        defer strings.release(versions_path)
+        let versions_z = try strings.copy(versions_path)
+        defer strings.release(versions_z)
+        let versions = files.read_limit((c.str)versions_z, 4194304) catch: continue
+        defer free(versions) in memory.heap
+        var line_start: usize
+        for line_end in 0..<versions.length:
+            if versions[line_end] != '\n': continue
+            let entry = (str)versions[line_start..<line_end]
+            line_start = line_end + 1
+            let (version, rest) = strings.split_once(entry, " ") else continue
+            let (_, commit_text) = strings.split_once(rest, " ") else continue
+            regenerate_release(database, site_root, owner, name, version, strings.trim(commit_text)) catch:
+                recover ()
+
+func regenerate_release(database: db.Database*, site_root: str, owner: str, name: str, version: str, commit_text: str) -> !:
+    var path_buffer: u8[192]
+    let path = try repo_path(owner, owner, name, path_buffer)
+    let snapshot = try database.snapshot()
+    defer snapshot.release()
+    var commit_id: u8[20]
+    try git.decode_id(commit_text, commit_id)
+    let value = try checked_object(snapshot.value(), path, commit_id)
+    defer value.release()
+    let object = try git.decode_object(value.value().bytes())
+    let commit = try git.decode_commit(object.payload)
+    var tree: u8[20]
+    try git.decode_id(commit.tree, tree)
+    try publish_source(database, site_root, owner, name, version, tree)
 
 func publish_source(database: db.Database*, site_root: str, owner: str, name: str, version: str, tree: const u8[]) -> !:
     var path_buffer: u8[192]

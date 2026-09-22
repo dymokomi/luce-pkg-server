@@ -206,7 +206,7 @@ language = "luce-base"
     listing = (site / '1.3.0/tree/index.html').read_text()
     assert '/testuser/git-wire/1.3.0/blob/package.prisma.html' in listing and 'large.txt' in listing
     source = (site / '1.3.0/blob/main.lucb.html').read_text()
-    assert '<span class="l" id="L1">pub func main() -&gt; i32:</span>' in source and 'id="L2"' in source
+    assert '<span class="l" id="L1"><span class="k">pub</span> <span class="k">func</span> <span class="d">main</span>() -&gt; <span class="t">i32</span>:</span>' in source and 'id="L2"' in source
     unpacked = root / 'release-unpacked'
     subprocess.run(['git', 'init', '-q', str(unpacked)], env=env, check=True, timeout=30)
     subprocess.run(['git', '-C', str(unpacked), 'unpack-objects'], input=pack, env=env, check=True, capture_output=True, timeout=30)
