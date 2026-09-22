@@ -1,77 +1,8 @@
-## Disposable integration-test credentials only; not an administrative CLI.
+## Disposable integration-test accounts only; not an administrative CLI. Bootstraps the
+## first user and prints two invitation codes for the harness to redeem.
 import auth
-import account_identity as keys
-import pkg
-import crypto_native as crypto
-import files
-import paths
-import strings
-import memory
-import c
-
-func write(root: str, name: str, bytes: const u8[]) -> !:
-    let path = try paths.join(root, name)
-    defer strings.release(path)
-    try files.write((c.str)path, bytes)
-
-func release_fixture(arguments: str[]) -> i32!:
-    assert(arguments.length == 8)
-    let source = try files.read_limit((c.str)arguments[6], 67108864)
-    defer free(source) in memory.heap
-    var digest: u8[32]
-    discard(try pkg.source_digest(source, digest))
-    let release = pkg.Release(origin = arguments[2], package = arguments[3], version = arguments[4],
-        commit = arguments[5], source_digest = digest, compiler = "luce-base", toolchain = "0.20.0")
-    var metadata: u8[24576]
-    var size: usize
-    if arguments[1] == "release-v2" or arguments[1] == "release-v2-bad":
-        var dependencies: pkg.Dependency[2]
-        dependencies[0] = pkg.Dependency(package = "testadmin/core", requirement = "^1.0.0")
-        dependencies[1] = pkg.Dependency(package = "testadmin/render-kit", requirement = "2.1.0")
-        let package_name = "wrong_name" if arguments[1] == "release-v2-bad" else "git_wire"
-        size = try pkg.encode_release_v2(release, package_name, dependencies, dependencies.length, metadata)
-    else:
-        size = try pkg.encode_release(release, metadata)
-    var seed: u8[32]
-    var key: u8[1952]
-    var secret: u8[4032]
-    defer crypto.wipe(secret)
-    try crypto.mldsa_keygen(seed, key, secret)
-    var random: u8[32]
-    var signature: u8[3309]
-    try crypto.mldsa_sign(secret, metadata[..<size], random, signature)
-    try write(arguments[7], "release-metadata", metadata[..<size])
-    try write(arguments[7], "release-signature", signature)
-    try write(arguments[7], "release-key", key)
-    return 0
-
-func nibble(byte: u8) -> u8:
-    if byte >= '0' and byte <= '9': return byte - '0'
-    assert(byte >= 'a' and byte <= 'f')
-    return byte - 'a' + 10
-
-func proof(arguments: str[]) -> i32!:
-    assert(arguments.length == 5 and arguments[4].length == 64)
-    var nonce: u8[32]
-    for i in 0..<32:
-        nonce[i] = (nibble(arguments[4].bytes[i * 2]) << 4) | nibble(arguments[4].bytes[i * 2 + 1])
-    # Deliberately public test seed, never used for a real account.
-    var seed: u8[32]
-    var wire: u8[5261]
-    try keys.public_key(seed, wire[..<1952])
-    try keys.prove(seed, arguments[2], arguments[3], nonce, wire[1952..])
-    var output: u8[10522]
-    let digits = b"0123456789abcdef"
-    for i in 0..<wire.length:
-        output[i * 2] = digits[wire[i] >> 4]
-        output[i * 2 + 1] = digits[wire[i] & 15]
-    print((str)output)
-    return 0
 
 pub func main(arguments: str[]) -> i32!:
-    if arguments.length > 1 and arguments[1] == "proof": return try proof(arguments)
-    if arguments.length > 1 and (arguments[1] == "release" or arguments[1] == "release-v2" or arguments[1] == "release-v2-bad"):
-        return try release_fixture(arguments)
     assert(arguments.length == 2)
     let authority = try auth.Authority.open(arguments[1], "integration-store-token")
     defer authority.release()
