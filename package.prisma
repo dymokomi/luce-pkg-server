@@ -1,7 +1,7 @@
 #prisma 4.0
 def package "luce-pkg-server" {
     str owner = "dymokomi"
-    str version = "0.2.2"
+    str version = "0.2.3"
     str kind = "package"
     str language = "luce-base"
     str description = "The registry behind pkg.luciaos.com: a Git host and package index for Luce and Luce Base."
@@ -73,5 +73,11 @@ def package "luce-pkg-server" {
         str owner = "dymokomi"
         str version = "^0.1.0"
         str path = "../luce-pkg"
+    }
+
+    def dependency "luce-std" {
+        str owner = "dymokomi"
+        str version = "^0.1.0"
+        str path = "../luce-std"
     }
 }
