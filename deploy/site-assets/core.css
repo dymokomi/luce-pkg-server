@@ -14,7 +14,7 @@
  *
  * What does NOT live here: each site's own frame (the doc shell and its
  * rails, the landing's centered hero, the stats dashboard's tiles and
- * charts), and the chart series colours, which are the stats page's own
+ * charts), and the chart series colors, which are the stats page's own
  * accessibility-validated addition. */
 
 :root {
@@ -289,7 +289,7 @@ code {
 a code { color: inherit; }
 
 /* Code blocks — a caption above a framed, scrollable listing, with the
- * language's own token colours. */
+ * language's own token colors. */
 
 figure.sample { margin: 0 0 1.7rem; }
 
