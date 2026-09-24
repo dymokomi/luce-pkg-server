@@ -30,6 +30,14 @@ jobs:
             git -C "../$repo" fetch --depth 1 origin "$revision"
             git -C "../$repo" checkout --detach FETCH_HEAD
           done
+          # the library packages the compiler and these sources depend on
+          while read -r name revision; do
+            revision=${revision%$'\r'}
+            [ -n "$name" ] || continue
+            git init -q "../$name"
+            git -C "../$name" fetch -q --depth 1 "https://github.com/dymokomi/$name.git" "$revision"
+            git -C "../$name" checkout -q --detach FETCH_HEAD
+          done < bootstrap/PACKAGES
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
