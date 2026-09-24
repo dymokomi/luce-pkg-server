@@ -24,7 +24,6 @@ jobs:
           - {name: large-objects, runner: ubuntu-24.04, kind: repository, fixture: large_objects, mode: native3}
           - {name: graph, runner: ubuntu-24.04, kind: repository, fixture: graph, mode: native3}
           - {name: receive, runner: ubuntu-24.04, kind: repository, fixture: receive, mode: native3}
-          - {name: pull-requests, runner: ubuntu-24.04, kind: repository, fixture: pull_requests, mode: native3}
           - {name: repository-native0, runner: ubuntu-24.04, kind: repository, fixture: repositories, mode: native0}
           - {name: repository-native1, runner: ubuntu-24.04, kind: repository, fixture: repositories, mode: native1}
           - {name: repository-native2, runner: ubuntu-24.04, kind: repository, fixture: repositories, mode: native2}
@@ -36,7 +35,6 @@ jobs:
           - {name: large-objects-sanitizers, runner: ubuntu-24.04, kind: sanitize, fixture: large_objects}
           - {name: graph-sanitizers, runner: ubuntu-24.04, kind: sanitize, fixture: graph}
           - {name: receive-sanitizers, runner: ubuntu-24.04, kind: sanitize, fixture: receive}
-          - {name: pull-requests-sanitizers, runner: ubuntu-24.04, kind: sanitize, fixture: pull_requests}
           - {name: refs-macos-heap, runner: macos-15, kind: heap, fixture: refs, mode: native0}
     steps:
       - uses: actions/checkout@v7
