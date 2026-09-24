@@ -61,10 +61,17 @@ printf '%s\n' "$source_commit" >"$staging/SOURCE_COMMIT"
 : >"$staging/DEPENDENCY_PINS"
 for pin in "$root"/bootstrap/*; do
   name=$(basename "$pin")
+  [ "$name" = PACKAGES ] && continue
   revision=$(tr -d '\n' <"$pin")
   [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid dependency pin: $name" >&2; exit 1; }
   printf '%s %s\n' "$name" "$revision" >>"$staging/DEPENDENCY_PINS"
 done
+# the library packages, one `name revision` line each
+while read -r name revision; do
+  [ -n "$name" ] || continue
+  [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid package pin: $name" >&2; exit 1; }
+  printf '%s %s\n' "$name" "$revision" >>"$staging/DEPENDENCY_PINS"
+done <"$root/bootstrap/PACKAGES"
 
 (
   cd "$staging"
