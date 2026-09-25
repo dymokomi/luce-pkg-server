@@ -39,6 +39,7 @@ def main():
         run([args.base.resolve(), "build", ROOT / "tests/http_auth.lucb", *flags, "-o", output / "http-auth"])
         run([args.base.resolve(), "build", ROOT / "tests/rate_limit.lucb", *flags, "-o", output / "rate-limit"])
         run([args.base.resolve(), "build", ROOT / "tests/account_fixture.lucb", *flags, "-o", output / "account-fixture"])
+        run([args.base.resolve(), "build", ROOT / "tests/legacy_fixture.lucb", *flags, "-o", output / "legacy-fixture"])
         # Unoptimized generated C executes the complete native ML-DSA/Argon2
         # integration matrix substantially more slowly than the native backend.
         # Hosted x86-64 Linux has exceeded seven minutes after completing Git,
@@ -51,6 +52,7 @@ def main():
         run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/admin.py"), output / "admin", output / "registry"], timeout=timeout)
         run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/deployment.py"), output / "admin"], timeout=timeout)
         run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/storage.py"), output / "registry", output / "admin", output / "account-fixture"], timeout=timeout)
+        run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/migration.py"), output / "registry", output / "admin", output / "legacy-fixture"], timeout=timeout)
         print(f"PASS {mode}", flush=True)
     print("PASS all selected compiler modes", flush=True)
 

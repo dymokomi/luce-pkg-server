@@ -6,7 +6,9 @@ import crypto_native as crypto
 import db
 import os
 import strings
+import files
 import luce_pkg_server.repositories as repositories
+import luce_pkg_server.migrate as migration
 
 func store_token() -> str!:
     let token = os.env((c.str)"LUCE_REGISTRY_STORE_TOKEN") else error(auth.invalid, "LUCE_REGISTRY_STORE_TOKEN is required")
@@ -67,8 +69,30 @@ func checkpoint(path: str) -> i32!:
     print(f"checkpoint {generation}")
     return 0
 
+## Copy a stopped registry's database into a fresh one whose Git objects live in files
+## (see migrate.lucb). The source is only read; the target and `<target>.objects` are
+## created or resumed. Both use the store token from the environment.
+func migrate(source: str, target: str) -> i32!:
+    if source == target: error(auth.invalid, "migrate into a different database path")
+    let source_name = try strings.copy(source)
+    defer strings.release(source_name)
+    if not files.exists((c.str)source_name): error(auth.invalid, "the source database does not exist")
+    let token = try store_token()
+    let old = try db.Database.open(source, token)
+    defer old.release()
+    let fresh = try db.Database.open(target, token)
+    defer fresh.release()
+    try repositories.use_objects(target)
+    var source_buffer: u8[1100]
+    var target_buffer: u8[1100]
+    let summary = try migration.migrate(old.value(), try format(source_buffer, f"{source}.objects"),
+        fresh.value(), try format(target_buffer, f"{target}.objects"))
+    print(f"migrated {summary.elements} elements, {summary.objects} objects ({summary.object_bytes} bytes), wrote {summary.written} object files, removed {summary.removed}")
+    return 0
+
 pub func main(arguments: str[]) -> i32!:
     if arguments.length == 2 and arguments[1] == "token": return try generate_token()
+    if arguments.length == 4 and arguments[1] == "migrate": return try migrate(arguments[2], arguments[3])
     if arguments.length != 3:
         return 2
     if arguments[1] == "init": return try initialize(arguments[2])

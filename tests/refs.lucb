@@ -154,9 +154,12 @@ func attempt(first: bool) -> !:
     while start.load(.acquire) == 0: thread.sleep(1)
     var updates: repositories.RefUpdate[2]
     var count: usize = 1
-    let repo = "prefix" if race_case == 0 else "batch"
+    let repo = "batch" if race_case == 1 else "prefix"
     if race_case == 0:
         updates[0] = change("refs/heads/topic" if first else "refs/heads/topic/child", zero, first_id)
+    elif race_case == 2:
+        # Disjoint refs of one repository: both batches must land, whichever commits first.
+        updates[0] = change("refs/heads/alpha" if first else "refs/heads/beta", zero, first_id)
     else:
         updates[0] = change("refs/heads/shared", zero, first_id if first else second_id)
         updates[1] = change("refs/heads/left" if first else "refs/heads/right", zero, first_id)
@@ -194,7 +197,7 @@ func race(database: db.Database*) -> !:
     try seed(database, "prefix")
     try seed(database, "batch")
     try database.listen()
-    for round in 0..<(usize)2:
+    for round in 0..<(usize)3:
         race_case = round
         ready.store(0, .relaxed)
         start.store(0, .relaxed)
@@ -207,8 +210,10 @@ func race(database: db.Database*) -> !:
         start.store(1, .release)
         try one.join()
         try two.join()
-        assert(wins.load(.acquire) == 1 and conflicts.load(.acquire) == 1 and unexpected.load(.acquire) == 0)
+        let expected_wins: u64 = 2 if round == 2 else 1
+        assert(wins.load(.acquire) == expected_wins and conflicts.load(.acquire) == 2 - expected_wins and unexpected.load(.acquire) == 0)
     assert(try has_ref(database, "prefix", "refs/heads/topic") != try has_ref(database, "prefix", "refs/heads/topic/child"))
+    assert(try has_ref(database, "prefix", "refs/heads/alpha") and try has_ref(database, "prefix", "refs/heads/beta"))
     let left = try has_ref(database, "batch", "refs/heads/left")
     let right = try has_ref(database, "batch", "refs/heads/right")
     assert(left != right)
@@ -218,6 +223,7 @@ pub func main(arguments: str[]) -> i32!:
     assert(arguments.length == 3)
     try identify()
     let database = try db.Database.open(arguments[1], "ref-test-token")
+    try repositories.use_objects(arguments[1])
     defer database.release()
     let path = arguments[1]
     assert(path.length + 5 <= socket_buffer.length)

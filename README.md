@@ -13,7 +13,8 @@ package index for Luce and Luce Base, written in Luce Base. MIT OR Apache-2.0.
   package with its README, dependencies and versions, and browsable, highlighted
   source for every release. Caddy serves all of that as static files; the registry
   is not on the path of a download.
-- **Git hosting.** Native Git Smart HTTP over Prism storage: anonymous clone and
+- **Git hosting.** Native Git Smart HTTP, refs and object listings in Prism, object
+  bytes in content-addressed files: anonymous clone and
   fetch, authenticated push with atomic ref updates, released tags immutable.
 - **Accounts.** Invitation-only registration, password login, sessions that last
   until revoked, and short-lived repository credentials for Git. Registration can
@@ -27,8 +28,10 @@ package index for Luce and Luce Base, written in Luce Base. MIT OR Apache-2.0.
 | --- | --- |
 | `src/luce_pkg_server/registry.lucb` | HTTP routes and the process |
 | `src/luce_pkg_server/repositories.lucb` | repositories, objects, refs, Smart HTTP, tag releases |
+| `src/luce_pkg_server/objects.lucb` | the content-addressed object files beside the database |
+| `src/luce_pkg_server/migrate.lucb` | `luce-pkg-admin migrate`: objects out of the database, once |
 | `src/luce_pkg_server/site.lucb`, `pages.lucb` | the static site: listings, pages, source browser |
-| `src/luce_pkg_server/admin.lucb` | `luce-pkg-admin`: store token, init, invite, checkpoint |
+| `src/luce_pkg_server/admin.lucb` | `luce-pkg-admin`: store token, init, invite, checkpoint, migrate |
 | `deploy/` | systemd unit, Caddyfile, host limits, backup and restore, the release bundle builder |
 | `docs/CONTRACTS.md` | the decisions the design rests on |
 

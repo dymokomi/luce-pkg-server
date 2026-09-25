@@ -1,0 +1,233 @@
+## One-time move of Git object bytes out of Prism (`luce-pkg-admin migrate`). The
+## registry used to keep every object's envelope in the database, inline up to 1 MiB
+## (`wire`) and above that as 1 MiB chunks under `<repository>/chunks`. That grew the
+## snapshot towards Prism's 256 MiB bound and made each bake cost the whole store.
+##
+## The migration copies a stopped registry's database into a fresh database holding
+## only metadata: accounts, repositories, refs, and one listing (`kind`, `size`) per
+## object, whose bytes it writes to the new database's object files after checking
+## that they hash to the object's id. The source is only read and stays the rollback.
+##
+## It is idempotent and resumable. Commits go in bounded batches; an interrupted run
+## leaves whole batches behind, and running it again copies what is missing, rewrites
+## any object file that is absent, refreshes every other property from the source and
+## removes what the source no longer holds. A complete run changes nothing further.
+import db
+import git
+import interop
+import memory
+import prism
+import strings
+import luce_pkg_server.objects as object_files
+
+pub let max_object_bytes: usize = 67108864
+## Elements per commit, and the bytes a batch may carry, far below Prism's journal frame.
+let batch_elements: usize = 512
+let batch_bytes: usize = 4194304
+
+pub struct Summary:
+    pub var elements: usize
+    pub var objects: usize
+    pub var written: usize
+    pub var object_bytes: u64
+    pub var removed: usize
+
+## An open transaction on the target that commits in bounded steps.
+struct Batch:
+    var database: db.Database*
+    var session: interop.Reference[prism.Session]?
+    var elements: usize
+    var bytes: usize
+
+    mutating func open() -> prism.Session*!:
+        if let current = self.session: return current.value()
+        let started = try self.database.begin()
+        self.session = started
+        return started.value()
+
+    ## Count one element of `bytes`; commit once the batch is full.
+    mutating func counted(bytes: usize) -> !:
+        self.elements += 1
+        self.bytes += bytes
+        if self.elements >= batch_elements or self.bytes >= batch_bytes: try self.commit()
+
+    mutating func commit() -> !:
+        if let current = self.session:
+            discard(try current.value().commit(wait_ms = 60000))
+            current.release()
+        self.session = none
+        self.elements = 0
+        self.bytes = 0
+
+    mutating func close():
+        if let current = self.session: current.release()
+        self.session = none
+
+func depth(path: str) -> usize:
+    var count: usize = 0
+    for byte in path.bytes:
+        if byte == '/': count += 1
+    return count
+
+## The `index`th `/`-separated component of `path` (0 is the first after the root).
+func component(path: str, index: usize) -> str:
+    var at: usize = 0
+    var start: usize = 1
+    for end in 1..<path.length + 1:
+        if end != path.length and path.bytes[end] != '/': continue
+        if at == index: return (str)path.bytes[start..<end]
+        at += 1
+        start = end + 1
+    return ""
+
+## `/repositories/<owner>/<name>/chunks[/...]`: the former chunk store, not copied.
+func former_chunks(path: str) -> bool:
+    return component(path, 0) == "repositories" and component(path, 3) == "chunks"
+
+## `/repositories/<owner>/<name>/objects/<id>`: an object listing.
+func object_listing(path: str) -> bool:
+    return depth(path) == 5 and component(path, 0) == "repositories" and component(path, 3) == "objects"
+
+## The first `count` components of `path`, as a prefix of it.
+func prefix(path: str, count: usize) -> str:
+    var seen: usize = 0
+    for end in 1..<path.length:
+        if path.bytes[end] != '/': continue
+        seen += 1
+        if seen == count: return (str)path.bytes[..<end]
+    return path
+
+## A source object's envelope in a new heap allocation, from any layout it may be in:
+## inline `wire`, `chunks-v1`, or (a source that was itself migrated) its object file.
+func source_wire(document: prism.Document*, path: str, id: const u8[], source_objects: str) -> u8[]!:
+    if document.has_property(path, "wire"):
+        let value = try document.get(path, "wire")
+        defer value.release()
+        let bytes = value.value().bytes()
+        let copy = try alloc u8[bytes.length] in memory.heap
+        for i in 0..<bytes.length: copy[i] = bytes[i]
+        return copy
+    if document.has_property(path, "chunks"):
+        let key_value = try document.get(path, "chunks")
+        defer key_value.release()
+        let size_value = try document.get(path, "size")
+        defer size_value.release()
+        let size = try size_value.value().integer_at()
+        if size <= 0 or size > (i64)max_object_bytes: error(prism.invalid, "invalid chunked object size")
+        var group_buffer: u8[320]
+        let group = try format(group_buffer, f"{prefix(path, 3)}/chunks/{try key_value.value().text_at()}")
+        let wire = try alloc u8[(usize)size] in memory.heap
+        errdefer free(wire) in memory.heap
+        var at: usize = 0
+        var index: usize = 0
+        while at < wire.length:
+            var label_buffer: u8[16]
+            let chunk = try document.get(group, try format(label_buffer, f"c{index}"))
+            defer chunk.release()
+            let bytes = chunk.value().bytes()
+            if bytes.length == 0 or bytes.length > wire.length - at: error(prism.invalid, "invalid stored chunk length")
+            for i in 0..<bytes.length: wire[at + i] = bytes[i]
+            at += bytes.length
+            index += 1
+        return wire
+    return try object_files.read(source_objects, id, max_object_bytes)
+
+## Write one object's file (verified against its id) and its listing.
+func copy_object(document: prism.Document*, path: str, target: prism.Session*, target_objects: str,
+        source_objects: str, summary: Summary*) -> usize!:
+    var id: u8[20]
+    try git.decode_id(component(path, 4), id)
+    summary.objects += 1
+    let listed = try target.contains(path)
+    if listed and try object_files.exists(target_objects, id):
+        # Already migrated: re-verify the file against its id, nothing to write.
+        let wire = try object_files.read(target_objects, id, max_object_bytes)
+        summary.object_bytes += (u64)wire.length
+        free(wire) in memory.heap
+        return 0
+    let wire = try source_wire(document, path, id, source_objects)
+    defer free(wire) in memory.heap
+    let object = try git.decode_object(wire)
+    var digest: u8[20]
+    discard(try git.hash_object(object.kind, object.payload, digest))
+    for i in 0..<(usize)20:
+        if digest[i] != id[i]: error(prism.invalid, "a stored Git object does not hash to its id")
+    try object_files.write(target_objects, id, wire)
+    summary.written += 1
+    summary.object_bytes += (u64)wire.length
+    if listed: return 0
+    try target.add(path, "git-object")
+    let kind = try prism.Value.text(object.kind)
+    defer kind.release()
+    let size = try prism.Value.integer((i64)wire.length)
+    defer size.release()
+    try target.set(path, "kind", kind)
+    try target.set(path, "size", size)
+    return path.length + 96
+
+## Copy one ordinary element: its type, every property and every metadata entry.
+func copy_element(document: prism.Document*, path: str, target: prism.Session*) -> usize!:
+    if not try target.contains(path): try target.add(path, try document.type_at(path))
+    var bytes = path.length + 64
+    for i in 0..<try document.property_count(path):
+        let name = try document.property_name(path, i)
+        let value = try document.get(path, name)
+        defer value.release()
+        try target.set(path, name, value)
+        bytes += name.length + value.value().bytes().length + 32
+    for i in 0..<try document.metadata_count(path):
+        let key = try document.metadata_name(path, i)
+        let text = try document.metadata(path, key)
+        try target.set_metadata(path, key, text)
+        bytes += key.length + text.length + 32
+    return bytes
+
+## Copy `source` (object files, if any, in `source_objects`) into `target`, whose
+## object files go to `target_objects`. Both databases are open as owners.
+pub func migrate(source: db.Database*, source_objects: str, target: db.Database*, target_objects: str) -> Summary!:
+    var summary: Summary
+    let snapshot = try source.snapshot()
+    defer snapshot.release()
+    let owned = try snapshot.value().document()
+    defer owned.release()
+    let document = owned.value()
+    if document.connection_count() != 0: error(prism.invalid, "the registry database holds connections; not migrated")
+    let count = document.element_count()
+    var deepest: usize = 0
+    for i in 0..<count:
+        let found = depth(try document.path_at(i))
+        if found > deepest: deepest = found
+    var batch = Batch(database = target)
+    defer batch.close()
+    # Parents before children: one pass per depth.
+    for level in 1..<deepest + 1:
+        for i in 0..<count:
+            let path = try document.path_at(i)
+            if path == "/" or depth(path) != level or former_chunks(path): continue
+            let session = try batch.open()
+            if object_listing(path) and try document.type_at(path) == "git-object":
+                try batch.counted(try copy_object(document, path, session, target_objects, source_objects, &summary))
+            else:
+                try batch.counted(try copy_element(document, path, session))
+            summary.elements += 1
+    try batch.commit()
+    # Remove what the source no longer holds, children before parents.
+    let copied = try target.snapshot()
+    defer copied.release()
+    let target_owned = try copied.value().document()
+    defer target_owned.release()
+    let written = target_owned.value()
+    var level = deepest + 1
+    while level > 1:
+        level -= 1
+        for i in 0..<written.element_count():
+            let path = try written.path_at(i)
+            if path == "/" or depth(path) != level or document.contains(path): continue
+            let session = try batch.open()
+            if try session.contains(path):
+                try session.remove(path)
+                summary.removed += 1
+                try batch.counted(path.length + 32)
+    try batch.commit()
+    discard(try target.bake(wait_ms = 60000))
+    return summary

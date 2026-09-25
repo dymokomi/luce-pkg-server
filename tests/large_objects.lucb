@@ -3,7 +3,7 @@ import db
 import auth
 import prism
 import git
-import crypto_native
+import strings
 import files
 import memory
 import c
@@ -33,7 +33,7 @@ func roundtrip(database: db.Database*, payload: const u8[], write: bool) -> !:
 func data_cases(database: db.Database*, bootstrap: c.str, write: bool) -> !:
     let actual_source = try files.read_limit(bootstrap, 33554432)
     defer free(actual_source) in memory.heap
-    assert(actual_source.length > repositories.chunk_bytes)
+    assert(actual_source.length > 1048576)
     try roundtrip(database, actual_source, write)
     # Cross the IPC/journal 16 MiB frame limit, not merely the former1MiB cap.
     let payload = try alloc u8[17825792] in memory.heap
@@ -74,18 +74,24 @@ func expect_invalid(database: db.Database*, id: const u8[]) -> !:
     value.release()
     assert(false)
 
-func stage_first(database: db.Database*, group: str, first: const u8[]) -> !:
-    let tx = try database.begin()
-    defer tx.release()
-    try tx.value().add("/repositories/alice/6c61726765/chunks", "directory")
-    try tx.value().add(group, "object-chunks")
-    let value = try prism.Value.array(prism.DType.uint8, [(i64)first.length], first)
-    defer value.release()
-    try tx.value().set(group, "c0", value)
-    discard(try tx.value().commit(wait_ms = 1000))
-    tx.value().close()
-    discard(try database.bake(wait_ms = 1000))
+var object_root: u8[1024]
+var object_root_length: usize
 
+## `<database>.objects/ab/cdef...` for `id`, as an owned C string.
+func object_file(id: const u8[]) -> str!:
+    var encoded: u8[40]
+    discard(try git.hex_id(id, encoded))
+    var buffer: u8[1200]
+    return try strings.copy(try format(buffer, f"{(str)object_root[..<object_root_length]}/{(str)encoded[..<2]}/{(str)encoded[2..]}"))
+
+func write_raw(id: const u8[], bytes: const u8[]) -> !:
+    let file = try object_file(id)
+    defer strings.release(file)
+    try files.write((c.str)file, bytes)
+
+## Interruptions and damage to the object files. `stage` leaves what a crash between
+## the file and its listing would: a stray temporary and a complete but unlisted file.
+## `resume`, in a new process, must not see the object until it is pushed again.
 func faults(database: db.Database*, stage_only: bool = false, resume: bool = false) -> !:
     let payload = try alloc u8[1048590] in memory.heap
     defer free(payload) in memory.heap
@@ -95,60 +101,46 @@ func faults(database: db.Database*, stage_only: bool = false, resume: bool = fal
     let n = try git.encode_object("blob", payload, wire)
     var id: u8[20]
     discard(try git.hash_blob(payload, id))
-    var digest: u8[32]
-    discard(try crypto_native.digest(wire[..<n], digest))
-    var key: u8[64]
-    let digits = b"0123456789abcdef"
-    for i in 0..<(usize)32:
-        key[i * 2] = digits[(usize)(digest[i] >> 4)]
-        key[i * 2 + 1] = digits[(usize)(digest[i] & 15)]
-    var group_buffer: u8[160]
-    let group = try format(group_buffer, f"/repositories/alice/6c61726765/chunks/{(str)key}")
-    if not resume: try stage_first(database, group, wire[..<1048576])
-    # An interrupted stage must not be visible as an object, even with valid c0.
+    if not resume:
+        var encoded: u8[40]
+        discard(try git.hex_id(id, encoded))
+        var buffer: u8[1200]
+        let fan_out = try strings.copy(try format(buffer, f"{(str)object_root[..<object_root_length]}/{(str)encoded[..<2]}"))
+        defer strings.release(fan_out)
+        try files.create_directory((c.str)fan_out)
+        let stray = try strings.copy(try format(buffer, f"{(str)object_root[..<object_root_length]}/{(str)encoded[..<2]}/.luce-interrupted"))
+        defer strings.release(stray)
+        try files.write((c.str)stray, wire[..<1000])
+        try write_raw(id, wire[..<n])
+    # A file the repository does not list is not an object of it.
     try expect_missing(database, id)
     if stage_only: return
     try repositories.put_object(database, "alice", "alice", "large", wire[..<n], id)
     try roundtrip(database, payload, false)
-    # Same-length corruption must fail SHA256 before returning assembled bytes.
-    let corrupt = try alloc u8[n - 1048576] in memory.heap
+    # Same-length corruption must fail the identity check before returning bytes.
+    let corrupt = try alloc u8[n] in memory.heap
     defer free(corrupt) in memory.heap
-    for i in 0..<corrupt.length: corrupt[i] = wire[1048576 + i]
-    corrupt[0] ^= 1
-    let changed = try database.begin()
-    defer changed.release()
-    let poison = try prism.Value.array(prism.DType.uint8, [(i64)corrupt.length], corrupt)
-    defer poison.release()
-    try changed.value().set(group, "c1", poison)
-    discard(try changed.value().commit(wait_ms = 1000))
-    changed.value().close()
+    for i in 0..<n: corrupt[i] = wire[i]
+    corrupt[n - 1] ^= 1
+    try write_raw(id, corrupt)
     try expect_invalid(database, id)
-    var encoded: u8[40]
-    discard(try git.hex_id(id, encoded))
-    var location_buffer: u8[160]
-    let location = try format(location_buffer, f"/repositories/alice/6c61726765/objects/{(str)encoded}")
-    var sizes: i64[3] = [0, -1, (i64)repositories.max_object_bytes + 1]
-    for size in sizes:
-        let bad = try database.begin()
-        defer bad.release()
-        let invalid_size = try prism.Value.integer(size)
-        defer invalid_size.release()
-        try bad.value().set(location, "size", invalid_size)
-        discard(try bad.value().commit(wait_ms = 1000))
-        bad.value().close()
-        try expect_invalid(database, id)
-    let bad_key = try database.begin()
-    defer bad_key.release()
-    let key_value = try prism.Value.text("../escape")
-    defer key_value.release()
-    try bad_key.value().set(location, "chunks", key_value)
-    discard(try bad_key.value().commit(wait_ms = 1000))
-    bad_key.value().close()
+    # A truncated or missing file behind a listing is damage, never absence.
+    try write_raw(id, wire[..<n - 1])
     try expect_invalid(database, id)
+    let file = try object_file(id)
+    defer strings.release(file)
+    try files.remove_file((c.str)file)
+    try expect_invalid(database, id)
+    # Pushing the object again restores its file; the listing already exists.
+    try repositories.put_object(database, "alice", "alice", "large", wire[..<n], id)
+    try roundtrip(database, payload, false)
 
 pub func main(arguments: c.str[]) -> i32!:
     assert(arguments.length == 4)
     let database = try db.Database.open((str)arguments[1], "large-test-token")
+    try repositories.use_objects((str)arguments[1])
+    let root = try format(object_root, f"{(str)arguments[1]}.objects")
+    object_root_length = root.length
     defer database.release()
     let phase = (str)arguments[2]
     if phase == "read":

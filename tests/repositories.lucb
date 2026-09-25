@@ -5,6 +5,9 @@ import prism
 import git
 import memory
 import thread
+import files
+import c
+import strings
 
 func setup(database: db.Database*) -> !:
     let authority = try auth.Authority.attach(try database.store())
@@ -20,13 +23,14 @@ func boundaries(database: db.Database*, write: bool) -> !:
     var name: u8[64]
     for i in 0..<(usize)64: name[i] = 'a'
     if write: try repositories.create(database, "alice", (str)name)
-    let payload = try alloc u8[repositories.chunk_bytes - 13] in memory.heap
+    # One MiB: the largest object the former in-database layout kept in one value.
+    let payload = try alloc u8[1048576 - 13] in memory.heap
     defer free(payload) in memory.heap
     for i in 0..<payload.length: payload[i] = (u8)(i % 256)
-    let wire = try alloc u8[repositories.chunk_bytes] in memory.heap
+    let wire = try alloc u8[1048576] in memory.heap
     defer free(wire) in memory.heap
     let count = try git.encode_object("blob", payload, wire)
-    assert(count == repositories.chunk_bytes)
+    assert(count == 1048576)
     var id: u8[20]
     discard(try git.hash_blob(payload, id))
     if write:
@@ -130,23 +134,16 @@ func negative(database: db.Database*) -> !:
     wrong.release()
     assert(read_denied)
 
-## Deliberately corrupt only a disposable fixture via privileged raw DB access.
-func corruption(database: db.Database*) -> !:
+## Deliberately corrupt only a disposable fixture's object file on disk.
+func corruption(database: db.Database*, database_path: str) -> !:
     var id: u8[20]
     try repositories.put_object(database, "alice", "alice", "test-package", b"blob 1\0x", id)
     var encoded_id: u8[40]
     discard(try git.hex_id(id, encoded_id))
-    let prefix = b"/repositories/alice/746573742d7061636b616765/objects/"
-    var path: u8[128]
-    for i in 0..<prefix.length: path[i] = prefix[i]
-    for i in 0..<(usize)40: path[prefix.length + i] = encoded_id[i]
-    let tx = try database.begin()
-    defer tx.release()
-    let poison = try prism.Value.array(prism.DType.uint8, [8], b"blob 1\0y")
-    defer poison.release()
-    try tx.value().set((str)path[..<prefix.length + 40], "wire", poison)
-    discard(try tx.value().commit(wait_ms = 1000))
-    discard(try database.bake(wait_ms = 1000))
+    var path: u8[1024]
+    let file = try strings.copy(try format(path, f"{database_path}.objects/{(str)encoded_id[..<2]}/{(str)encoded_id[2..]}"))
+    defer strings.release(file)
+    try files.write((c.str)file, b"blob 1\0y")
     var conflict = false
     repositories.put_object(database, "alice", "alice", "test-package", b"blob 1\0x", id) catch failure:
         assert(failure.code == prism.conflict)
@@ -201,6 +198,7 @@ func race(database: db.Database*) -> !:
 pub func main(arguments: str[]) -> i32!:
     assert(arguments.length == 3)
     let database = try db.Database.open(arguments[1], "test-store-token")
+    try repositories.use_objects(arguments[1])
     defer database.release()
     let path = arguments[1]
     assert(path.length + 5 <= socket_buffer.length)
@@ -219,10 +217,10 @@ pub func main(arguments: str[]) -> i32!:
             defer client.release()
             try check(client.value(), true)
             try negative(client.value())
-            try corruption(client.value())
+            try corruption(client.value(), path)
         else:
             try check(database.value(), true)
             try negative(database.value())
-            try corruption(database.value())
+            try corruption(database.value(), path)
     print("PASS repository storage")
     return 0

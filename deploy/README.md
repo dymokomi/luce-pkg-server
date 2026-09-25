@@ -104,6 +104,30 @@ the backend therefore enforces explicit 15-second idle and five-minute
 request/response/application deadlines, while Caddy enforces the body cap plus
 five-minute upstream response-header and five-second dial deadlines.
 
+## Object files
+
+Git object bytes are files beside the database, `registry.db.objects/ab/cdef...`,
+written once through a synced temporary and a no-replace rename; Prism holds only
+which repository lists which object. The directory is part of the state directory,
+so `backup.sh` and `restore.sh` carry it with the database.
+
+A database from before object files is converted once, offline, into a fresh state
+directory; the old one is left untouched as the rollback:
+
+```sh
+sudo systemctl stop luce-pkg-server
+sudo install -d -o luce-pkg -g luce-pkg -m 0700 /var/lib/luce-pkg-server-next
+sudo /usr/local/sbin/luce-pkg-admin-run migrate /var/lib/luce-pkg-server/registry.db \
+  /var/lib/luce-pkg-server-next/registry.db
+sudo mv /var/lib/luce-pkg-server /var/lib/luce-pkg-server-before-objects
+sudo mv /var/lib/luce-pkg-server-next /var/lib/luce-pkg-server
+sudo systemctl start luce-pkg-server
+```
+
+`migrate` verifies every object against its id while writing its file. It is
+idempotent and resumable: run it again after an interruption and it continues,
+refreshing everything else from the source; a complete run writes nothing new.
+
 ## Checkpoints
 
 A commit is durable in Prism's journal on its own; a checkpoint (bake) folds the

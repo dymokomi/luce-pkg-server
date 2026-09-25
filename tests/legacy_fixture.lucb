@@ -1,0 +1,124 @@
+## Disposable fixture: a registry database in the layout before object files, with Git
+## object envelopes inside Prism (inline `wire` up to 1 MiB, `chunks-v1` above), for
+## the migration round trip. Arguments: DATABASE PACK MAIN_COMMIT_HEX. The account is
+## testadmin / fixture-password; the repository is testadmin/legacy.
+import auth
+import c
+import crypto_native
+import db
+import files
+import git
+import memory
+import prism
+import repositories
+
+let token = "integration-store-token"
+let chunk_bytes: usize = 1048576
+let repository = "/repositories/testadmin/6c6567616379"
+
+func encode_hex(bytes: const u8[], output: u8[]) -> str:
+    let digits = b"0123456789abcdef"
+    for i in 0..<bytes.length:
+        output[i * 2] = digits[(usize)(bytes[i] >> 4)]
+        output[i * 2 + 1] = digits[(usize)(bytes[i] & 15)]
+    return (str)output[..<bytes.length * 2]
+
+## One object exactly as the former put_object stored it.
+func put_legacy(database: db.Database*, wire: const u8[], id: const u8[]) -> !:
+    var encoded: u8[40]
+    var location_buffer: u8[160]
+    let location = try format(location_buffer, f"{repository}/objects/{encode_hex(id, encoded)}")
+    if wire.length <= chunk_bytes:
+        let tx = try database.begin()
+        defer tx.release()
+        try tx.value().add(location, "git-object")
+        let value = try prism.Value.array(prism.DType.uint8, [(i64)(wire).length], wire)
+        defer value.release()
+        try tx.value().set(location, "wire", value)
+        discard(try tx.value().commit(wait_ms = 1000))
+        return
+    var digest: u8[32]
+    discard(try crypto_native.digest(wire, digest))
+    var key_buffer: u8[64]
+    let key = encode_hex(digest, key_buffer)
+    var group_buffer: u8[160]
+    let group = try format(group_buffer, f"{repository}/chunks/{key}")
+    let staged = try database.begin()
+    defer staged.release()
+    var chunks_buffer: u8[96]
+    let chunks = try format(chunks_buffer, f"{repository}/chunks")
+    if not try staged.value().contains(chunks): try staged.value().add(chunks, "directory")
+    try staged.value().add(group, "object-chunks")
+    discard(try staged.value().commit(wait_ms = 1000))
+    var at: usize = 0
+    var index: usize = 0
+    while at < wire.length:
+        let count = chunk_bytes if wire.length - at > chunk_bytes else wire.length - at
+        let tx = try database.begin()
+        defer tx.release()
+        var label_buffer: u8[16]
+        let value = try prism.Value.array(prism.DType.uint8, [(i64)(wire[at..<at + count]).length], wire[at..<at + count])
+        defer value.release()
+        try tx.value().set(group, try format(label_buffer, f"c{index}"), value)
+        discard(try tx.value().commit(wait_ms = 1000))
+        at += count
+        index += 1
+    let tx = try database.begin()
+    defer tx.release()
+    try tx.value().add(location, "git-object")
+    let format_value = try prism.Value.text("chunks-v1")
+    defer format_value.release()
+    let size = try prism.Value.integer((i64)wire.length)
+    defer size.release()
+    let key_value = try prism.Value.text(key)
+    defer key_value.release()
+    try tx.value().set(location, "format", format_value)
+    try tx.value().set(location, "size", size)
+    try tx.value().set(location, "chunks", key_value)
+    discard(try tx.value().commit(wait_ms = 1000))
+
+func put_main(database: db.Database*, commit_hex: str) -> !:
+    var id: u8[20]
+    try git.decode_id(commit_hex, id)
+    let name = "refs/heads/main"
+    var encoded: u8[64]
+    var location_buffer: u8[160]
+    let location = try format(location_buffer, f"{repository}/refs/{encode_hex(name.bytes, encoded)}")
+    let tx = try database.begin()
+    defer tx.release()
+    var refs_buffer: u8[96]
+    try tx.value().add(try format(refs_buffer, f"{repository}/refs"), "directory")
+    try tx.value().add(location, "git-ref")
+    let label = try prism.Value.text(name)
+    defer label.release()
+    let target = try prism.Value.array(prism.DType.uint8, [(i64)(id).length], id)
+    defer target.release()
+    let guard = try prism.Value.boolean(true)
+    defer guard.release()
+    try tx.value().set(location, "name", label)
+    try tx.value().set(location, "id", target)
+    try tx.value().set(repository, "refs_serialization", guard)
+    discard(try tx.value().commit(wait_ms = 1000))
+
+pub func main(arguments: c.str[]) -> i32!:
+    assert(arguments.length == 4)
+    let database = try db.Database.open((str)arguments[1], token)
+    defer database.release()
+    let authority = try auth.Authority.attach(try database.value().store())
+    defer authority.release()
+    try authority.value().bootstrap("testadmin", "fixture-password")
+    try repositories.initialize(database.value())
+    try repositories.create(database.value(), "testadmin", "legacy")
+    let bytes = try files.read_limit(arguments[2], 268435456)
+    defer free(bytes) in memory.heap
+    var pack = try git.decode_pack(bytes)
+    defer pack.close()
+    for item in pack.items:
+        let wire = try alloc u8[item.payload.length + 32] in memory.heap
+        defer free(wire) in memory.heap
+        let count = try git.encode_object(item.kind, item.payload, wire)
+        try put_legacy(database.value(), wire[..<count], item.id)
+    try put_main(database.value(), (str)arguments[3])
+    discard(try database.value().bake(wait_ms = 60000))
+    print(f"legacy {pack.items.length} objects")
+    return 0

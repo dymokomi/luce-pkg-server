@@ -34,6 +34,12 @@ Owner decision, September 21, 2026:
 - Collision defense: reject the known SHAttered colliding PDF prefixes; reject
   inserting two distinct byte-strings that hash to one object ID; never silently
   alias SHA-1 and SHA-256 object IDs.
+- Object bytes live outside Prism, one immutable file per object at
+  `<database>.objects/ab/cdef...`, named by the Git id and shared by every repository
+  that holds it. Prism keeps only the listing (`kind`, `size`) that makes an object
+  part of a repository; reads are confined to listed objects and re-check the id.
+  Keeping bytes out of the database keeps each bake proportional to metadata, far
+  from Prism's 256 MiB snapshot and journal bounds.
 
 ## HTTPS proxy boundary
 

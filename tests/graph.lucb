@@ -103,6 +103,7 @@ func cases(database: db.Database*) -> !:
 pub func main(arguments: str[]) -> i32!:
     assert(arguments.length == 3)
     let database = try db.Database.open(arguments[1], "graph-test")
+    try repositories.use_objects(arguments[1])
     defer database.release()
     if arguments[2] == "read":
         let value = try repositories.get_ref(database.value(), "alice", "alice", "graph", "refs/heads/main")

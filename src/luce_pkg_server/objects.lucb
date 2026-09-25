@@ -1,0 +1,144 @@
+## Content-addressed Git object files, kept beside the database rather than in it:
+##   <database>.objects/ab/cdef0123...   one canonical uncompressed loose-object envelope
+## named by its Git id (two hex digits of fan-out, then the other 38). Prism holds only
+## which repository lists which object; the bytes live here, shared by every repository
+## that pushed the same id, so a store of any size never grows the Prism journal.
+##
+## A file is written once: a synced temporary sibling is renamed without replacement and
+## the directory is synced, so a reader finds the whole object or nothing, and a crash
+## leaves at most a stray `.luce-*` temporary. Files are never modified. An existing file
+## with other bytes for the same id is refused as an identity collision, never replaced.
+import c
+import files
+import io
+import memory
+import strings
+import git
+import prism
+
+## The directory of this process's object files, set once at startup by `configure`.
+## Worker threads only read it, and only after the server has started them.
+var configured: u8[1024]
+var configured_length: usize
+
+## Point this process at `<database>.objects`, creating it if needed. Call before any
+## worker thread starts; every repository operation reads and writes through it.
+pub func configure(database: str) -> !:
+    let suffix = ".objects"
+    if database.length == 0 or database.length + suffix.length > configured.length:
+        error(prism.invalid, "object store path is empty or too long")
+    for i in 0..<database.length: configured[i] = database.bytes[i]
+    for i in 0..<suffix.length: configured[database.length + i] = suffix.bytes[i]
+    configured_length = database.length + suffix.length
+    try ensure_directory((str)configured[..<configured_length], none)
+
+## The configured object directory; an unconfigured process refuses every object access.
+pub func configured_root() -> str!:
+    if configured_length == 0: error(prism.invalid, "the object store is not configured")
+    return (str)configured[..<configured_length]
+
+## Create one directory if it is missing. A new entry is made durable by syncing the
+## directory that holds it, so a later object file is never left without its parent.
+func ensure_directory(path: str, parent: str?) -> !:
+    let name = try strings.copy(path)
+    defer strings.release(name)
+    if files.exists((c.str)name): return
+    files.create_directory((c.str)name, 448) catch failure:
+        if failure.code != files.already_exists: error(failure.code, failure.message)
+        return
+    if let holder = parent: try sync_directory(holder)
+
+func sync_directory(path: str) -> !:
+    let name = try strings.copy(path)
+    defer strings.release(name)
+    var directory = try files.File.open((c.str)name)
+    defer directory.destroy()
+    try directory.sync()
+    try directory.close()
+
+## `<root>/ab` and `<root>/ab/cdef...` for one 20-byte id.
+struct Location:
+    var directory: u8[1100]
+    var directory_length: usize
+    var file: u8[1140]
+    var file_length: usize
+
+    func fan_out() -> str:
+        return (str)self.directory[..<self.directory_length]
+
+    func path() -> str:
+        return (str)self.file[..<self.file_length]
+
+func locate(root: str, id: const u8[]) -> Location!:
+    if id.length != 20: error(prism.invalid, "invalid Git object id")
+    var encoded: u8[40]
+    discard(try git.hex_id(id, encoded))
+    var result: Location
+    result.directory_length = (try format(result.directory, f"{root}/{(str)encoded[..<2]}")).length
+    result.file_length = (try format(result.file, f"{root}/{(str)encoded[..<2]}/{(str)encoded[2..]}")).length
+    return result
+
+func same(left: const u8[], right: const u8[]) -> bool:
+    if left.length != right.length: return false
+    for i in 0..<left.length:
+        if left[i] != right[i]: return false
+    return true
+
+## True when the object file already holds exactly `wire`; false when there is none.
+## Other bytes under the same id are an identity collision (or on-disk corruption).
+func already_stored(path: str, wire: const u8[]) -> bool!:
+    let name = try strings.copy(path)
+    defer strings.release(name)
+    if not files.exists((c.str)name): return false
+    let current = files.read_limit((c.str)name, wire.length) catch failure:
+        if failure.code == files.too_large: error(prism.conflict, "Git object identity collision")
+        error(failure.code, failure.message)
+    defer free(current) in memory.heap
+    if not same(current, wire): error(prism.conflict, "Git object identity collision")
+    return true
+
+## Store the envelope `wire` as object `id` below `root`. The caller has already hashed
+## `wire` to `id`. Idempotent for identical bytes; durable when it returns.
+pub func write(root: str, id: const u8[], wire: const u8[]) -> !:
+    let location = try locate(root, id)
+    if try already_stored(location.path(), wire): return
+    try ensure_directory(location.fan_out(), root)
+    let directory = try strings.copy(location.fan_out())
+    defer strings.release(directory)
+    var temporary = try files.TemporaryFile.create((c.str)directory, 384)
+    defer temporary.destroy()
+    try io.write_all(&temporary, wire)
+    try temporary.sync()
+    let target = try strings.copy(location.path())
+    defer strings.release(target)
+    temporary.publish((c.str)target, replace = false) catch failure:
+        # A concurrent push of the same object published first; it must be identical.
+        if failure.code != files.already_exists: error(failure.code, failure.message)
+        temporary.destroy()
+        discard(try already_stored(location.path(), wire))
+        return
+    try sync_directory(location.fan_out())
+
+## Read object `id` below `root` into a new heap allocation, verifying that its bytes
+## hash to `id`. A missing file is `prism.missing`; any other mismatch is invalid.
+pub func read(root: str, id: const u8[], limit: usize) -> u8[]!:
+    let location = try locate(root, id)
+    let name = try strings.copy(location.path())
+    defer strings.release(name)
+    let wire = files.read_limit((c.str)name, limit) catch failure:
+        if failure.code == files.missing: error(prism.missing, "Git object file is missing")
+        if failure.code == files.too_large: error(prism.invalid, "stored Git object exceeds limit")
+        error(failure.code, failure.message)
+    errdefer free(wire) in memory.heap
+    let object = git.decode_object(wire) catch: error(prism.invalid, "stored Git object is malformed")
+    var digest: u8[20]
+    discard(try git.hash_object(object.kind, object.payload, digest))
+    if not same(digest, id): error(prism.invalid, "stored Git object identity mismatch")
+    return wire
+
+## True when object `id` has a file below `root`; its bytes are not checked.
+pub func exists(root: str, id: const u8[]) -> bool!:
+    let location = try locate(root, id)
+    let name = try strings.copy(location.path())
+    defer strings.release(name)
+    return files.exists((c.str)name)

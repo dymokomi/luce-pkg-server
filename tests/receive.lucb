@@ -222,6 +222,7 @@ func cases(database: db.Database*) -> !:
 pub func main(arguments: str[]) -> i32!:
     assert(arguments.length == 3)
     let database = try db.Database.open(arguments[1], "receive-test")
+    try repositories.use_objects(arguments[1])
     defer database.release()
     if arguments[2] == "read":
         var id: u8[20]

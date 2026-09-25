@@ -483,6 +483,7 @@ func run(arguments: str[]) -> i32!:
     let authority = try auth.Authority.attach(try owner.value().store())
     defer authority.release()
     try repositories.initialize(owner.value())
+    try repositories.use_objects(arguments[1])
     try owner.value().listen()
     var socket_buffer: u8[4096]
     let socket = try format(socket_buffer, f"{arguments[1]}.sock")
