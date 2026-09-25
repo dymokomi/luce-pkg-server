@@ -5,6 +5,7 @@ import c
 import crypto_native as crypto
 import db
 import os
+import strings
 import luce_pkg_server.repositories as repositories
 
 func store_token() -> str!:
@@ -46,9 +47,17 @@ func invite(socket: str) -> i32!:
     print(try code.value().text_at())
     return 0
 
-## Offline checkpoint: the registry must be stopped so this process can acquire
-## the exclusive Prism owner lock. Backup tooling calls this before copying data.
+## Checkpoint (bake) the database. Given the running registry's `<database>.sock`, it
+## asks the owner to bake online, queueing behind any writer; the deployment's timer
+## does this. Given the database path, the registry must be stopped so this process
+## can take the exclusive Prism owner lock; backup tooling does that before copying.
 func checkpoint(path: str) -> i32!:
+    if strings.ends_with(path, ".sock"):
+        let online = try db.Database.connect(path, try store_token())
+        defer online.release()
+        let generation = try online.value().bake(wait_ms = 60000)
+        print(f"checkpoint {generation}")
+        return 0
     let database = try db.Database.open(path, try store_token())
     defer database.release()
     let authority = try auth.Authority.attach(try database.value().store())

@@ -104,6 +104,23 @@ the backend therefore enforces explicit 15-second idle and five-minute
 request/response/application deadlines, while Caddy enforces the body cap plus
 five-minute upstream response-header and five-second dial deadlines.
 
+## Checkpoints
+
+A commit is durable in Prism's journal on its own; a checkpoint (bake) folds the
+journal into a new snapshot and holds the database's single writer slot meanwhile.
+Requests never bake per operation: the registry bakes once 32 MiB of journal has
+accumulated since its last bake, and `luce-pkg-checkpoint.timer` bakes every fifteen
+minutes through the running owner's socket (`luce-pkg-admin checkpoint
+/var/lib/luce-pkg-server/registry.db.sock`), which also covers account writes. A
+writer that meets a running bake queues for up to a minute rather than failing.
+Install the wrapper and the timer from `deploy/host/`:
+
+```sh
+sudo install -o root -g root -m 0750 deploy/host/luce-pkg-admin-run /usr/local/sbin/luce-pkg-admin-run
+sudo install -m 0644 deploy/host/luce-pkg-checkpoint.service deploy/host/luce-pkg-checkpoint.timer /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now luce-pkg-checkpoint.timer
+```
+
 ## Abuse and bandwidth limits
 
 `deploy/host/` holds what runs on the VPS itself, outside the registry:

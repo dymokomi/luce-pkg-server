@@ -1,0 +1,9 @@
+[Unit]
+Description=Bake the running registry's Prism journal into a fresh snapshot
+# Only while the registry runs: the online checkpoint goes through its owner socket.
+ConditionPathExists=/var/lib/luce-pkg-server/registry.db.sock
+After=luce-pkg-server.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/luce-pkg-admin-run checkpoint /var/lib/luce-pkg-server/registry.db.sock

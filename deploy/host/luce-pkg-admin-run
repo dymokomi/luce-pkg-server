@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# Root reads the 0600 environment file, then drops to the service user.
+# The store token travels only in the environment, never in argv.
+# Install as /usr/local/sbin/luce-pkg-admin-run, owner root, mode 0750.
+set -euo pipefail
+[[ $EUID -eq 0 ]] || { echo "run as root" >&2; exit 1; }
+set -a; source /etc/luce-pkg-server/environment; set +a
+exec setpriv --reuid luce-pkg --regid luce-pkg --clear-groups \
+  env -i PATH=/usr/bin LUCE_REGISTRY_STORE_TOKEN="$LUCE_REGISTRY_STORE_TOKEN" LUCE_REGISTRY_ORIGIN="$LUCE_REGISTRY_ORIGIN" \
+  /opt/luce-pkg-server/current/luce-pkg-admin "$@"

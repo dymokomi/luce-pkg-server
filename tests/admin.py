@@ -79,6 +79,10 @@ with tempfile.TemporaryDirectory(prefix='luce-pkg-admin-', dir='/tmp') as tempor
             assert request(port, 'POST', '/v1/invites/redeem', {
                 'code': code.decode(), 'name': 'replay', 'password': 'production-profile-test'
             })[0] == 400
+            # The timer's online checkpoint bakes through the running owner's socket.
+            invoke(['checkpoint', socket_path], wrong, False)
+            assert invoke(['checkpoint', socket_path], environment).stdout.startswith(b'checkpoint ')
+            assert request(port, 'GET', '/health') == (200, b'ok')
         finally:
             process.terminate()
             try:
@@ -93,4 +97,4 @@ with tempfile.TemporaryDirectory(prefix='luce-pkg-admin-', dir='/tmp') as tempor
     assert invoke(['checkpoint', database], environment).stdout.startswith(b'checkpoint ')
     assert not socket_path.exists()
 
-print('PASS operator init, live invitation, one-use redemption and offline checkpoint')
+print('PASS operator init, live invitation, one-use redemption, online and offline checkpoint')

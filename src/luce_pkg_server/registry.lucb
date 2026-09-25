@@ -333,10 +333,16 @@ struct App:
         var reason_size: usize = 0
         discard(repositories.receive_pack(self.database.value(), principal, owner, name, wire, (str)self.site[..<self.site_size]) catch failure:
             accepted = false
-            # The pusher sees only release-rule reasons; the journal keeps every one.
+            # The pusher sees only release-rule reasons; the journal keeps every one, as
+            # one line of plain text whatever bytes the message holds.
             var log_line: u8[512]
-            let logged = format(log_line, f"push to {owner}/{name} refused: {failure.message}\n") catch: recover "push refused (message too long)\n"
-            discard(io.stderr().write(logged) catch: recover 0)
+            var used = (format(log_line, f"push to {owner}/{name} refused: ") catch: recover "").length
+            for byte in failure.message.bytes:
+                if used == log_line.length - 1: break
+                log_line[used] = byte if byte >= 0x20 and byte < 0x7f else '?'
+                used += 1
+            log_line[used] = '\n'
+            discard(io.stderr().write(log_line[..<used + 1]) catch: recover 0)
             let explained = failure.message if strings.starts_with(failure.message, "release: ") else ""
             for byte in explained.bytes:
                 if reason_size == reason_buffer.length: break

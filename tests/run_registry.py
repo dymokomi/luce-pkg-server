@@ -50,6 +50,7 @@ def main():
         run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/check_accounts.py"), output / "registry", output / "account-fixture"], timeout=timeout)
         run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/admin.py"), output / "admin", output / "registry"], timeout=timeout)
         run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/deployment.py"), output / "admin"], timeout=timeout)
+        run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/storage.py"), output / "registry", output / "admin", output / "account-fixture"], timeout=timeout)
         print(f"PASS {mode}", flush=True)
     print("PASS all selected compiler modes", flush=True)
 

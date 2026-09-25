@@ -27,6 +27,11 @@ for asset in ('core.css', 'style.css', 'packages.css', 'site.js', 'theme.js', 'p
     assert (ROOT / 'deploy/site-assets' / asset).is_file()
 assert 'ReadWritePaths=/var/lib/luce-pkg-server /var/lib/luce-pkg-site' in service and 'UMask=0027' in service
 subprocess.run(['bash', '-n', ROOT / 'deploy/host/luce-egress-budget.sh'], check=True)
+checkpoint = (ROOT / 'deploy/host/luce-pkg-checkpoint.service').read_text()
+assert 'luce-pkg-admin-run checkpoint /var/lib/luce-pkg-server/registry.db.sock' in checkpoint
+assert 'ConditionPathExists=/var/lib/luce-pkg-server/registry.db.sock' in checkpoint
+assert 'OnUnitActiveSec=15min' in (ROOT / 'deploy/host/luce-pkg-checkpoint.timer').read_text()
+subprocess.run(['bash', '-n', ROOT / 'deploy/host/luce-pkg-admin-run'], check=True)
 for script in ('backup.sh', 'restore.sh'):
     subprocess.run(['bash', '-n', ROOT / 'deploy' / script], check=True)
 subprocess.run(['bash', '-n', ROOT / 'deploy' / 'build-release.sh'], check=True)
