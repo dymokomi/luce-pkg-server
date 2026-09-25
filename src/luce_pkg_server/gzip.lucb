@@ -1,0 +1,71 @@
+## Gzip request bodies (RFC 1952). Stock Git compresses a smart-HTTP request above
+## 1 KiB with `Content-Encoding: gzip`, as a fetch naming many refs does. One member
+## is accepted, inflated through luce-compress's raw DEFLATE decoder, and checked
+## against its CRC-32 and size trailer. The inflated size is capped by the caller's
+## request limit, so a small body cannot expand past what an uncompressed one may be.
+import memory
+import compress
+import compress_native as codec
+import prism
+
+let header_crc_flag: u8 = 2
+let extra_flag: u8 = 4
+let name_flag: u8 = 8
+let comment_flag: u8 = 16
+
+func u32_at(data: const u8[], at: usize) -> u64:
+    return (u64)data[at] | ((u64)data[at + 1] << 8) | ((u64)data[at + 2] << 16) | ((u64)data[at + 3] << 24)
+
+## Offset of the DEFLATE data after a member header.
+func header_end(data: const u8[]) -> usize!:
+    if data.length < 18 or data[0] != 0x1f or data[1] != 0x8b or data[2] != 8:
+        error(prism.invalid, "not a gzip body")
+    let flags = data[3]
+    if (flags & 0xe0) != 0: error(prism.invalid, "reserved gzip header flags")
+    var at: usize = 10
+    if (flags & extra_flag) != 0:
+        if data.length - at < 2: error(prism.invalid, "truncated gzip header")
+        at += 2 + ((usize)data[at] | ((usize)data[at + 1] << 8))
+    for flag in [name_flag, comment_flag]:
+        if (flags & flag) == 0: continue
+        while at < data.length and data[at] != 0: at += 1
+        at += 1
+    if (flags & header_crc_flag) != 0: at += 2
+    if at > data.length - 8: error(prism.invalid, "truncated gzip header")
+    return at
+
+## Inflate the gzip body `data` into a new heap allocation of at most `limit` bytes.
+pub func inflate(data: const u8[], limit: usize) -> u8[]!:
+    let start = try header_end(data)
+    let body = data[start..<data.length - 8]
+    var decoder = codec.make_decoder("raw", (i64)body.length, (i64)limit) catch failure:
+        error(prism.invalid, failure.message)
+    defer decoder.close()
+    var output = try alloc u8[limit if limit < 65536 else 65536] in memory.heap
+    errdefer free(output) in memory.heap
+    var consumed: usize = 0
+    var produced: usize = 0
+    while true:
+        if produced == output.length:
+            if output.length == limit: error(prism.invalid, "gzip body exceeds the request limit")
+            let grown = output.length * 2 if output.length * 2 < limit else limit
+            let larger = try alloc u8[grown] in memory.heap
+            memory.copy(larger, output, produced)
+            free(output) in memory.heap
+            output = larger
+        let step = decoder.step(body[consumed..], output[produced..], final_input = true, work_limit = codec.maximum_work_limit) catch failure:
+            error(prism.invalid, "gzip body is corrupt or exceeds the request limit")
+        consumed += (usize)step.consumed
+        produced += (usize)step.produced
+        if step.status == codec.finished: break
+        if step.status == codec.need_input: error(prism.invalid, "truncated gzip body")
+    # The member must end exactly at its trailer: no second member, no trailing bytes.
+    if consumed != body.length: error(prism.invalid, "unexpected bytes after the gzip member")
+    let expected_crc = u32_at(data, data.length - 8)
+    let expected_size = u32_at(data, data.length - 4)
+    if (u64)compress.crc32(output[..<produced]) != expected_crc or ((u64)produced & 0xffffffff) != expected_size:
+        error(prism.invalid, "gzip body fails its checksum")
+    let exact = try alloc u8[produced] in memory.heap
+    memory.copy(exact, output, produced)
+    free(output) in memory.heap
+    return exact

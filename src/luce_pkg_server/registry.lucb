@@ -18,6 +18,7 @@ import crypto_native as crypto
 import time
 import rate_limit
 import luce_pkg_server.site as site_files
+import luce_pkg_server.gzip as gzip
 import sync
 import prism
 
@@ -302,7 +303,12 @@ struct App:
             if content_type != "application/x-git-upload-pack-request": return reply("unsupported content type", 415)
             let body = request.body() catch: return reply("invalid body", 400)
             defer body.release()
-            let wire = body.value().bytes(1048576) catch: return reply("invalid fetch body", 400)
+            let received = body.value().bytes(1048576) catch: return reply("invalid fetch body", 400)
+            let inflated = inflated_body(request, received, 1048576) catch failure:
+                return reply(failure.message, 415 if failure.code == prism.unsupported else 400)
+            defer release_inflated(inflated)
+            var wire: const u8[] = received
+            if let bytes = inflated: wire = bytes
             discard(git.decode_fetch(wire) catch: return reply("invalid fetch request", 400))
             let output = alloc u8[67108864] in memory.heap catch: return reply("internal error", 500)
             defer free(output) in memory.heap
@@ -312,7 +318,12 @@ struct App:
         if content_type != "application/x-git-receive-pack-request": return reply("unsupported content type", 415)
         let body = request.body() catch: return reply("invalid body", 400)
         defer body.release()
-        let wire = body.value().bytes((i64)repositories.max_object_bytes) catch: return reply("invalid body", 400)
+        let received = body.value().bytes((i64)repositories.max_object_bytes) catch: return reply("invalid body", 400)
+        let inflated = inflated_body(request, received, repositories.max_object_bytes) catch failure:
+            return reply(failure.message, 415 if failure.code == prism.unsupported else 400)
+        defer release_inflated(inflated)
+        var wire: const u8[] = received
+        if let bytes = inflated: wire = bytes
         # Before a push larger than its buffer, Git sends a lone flush packet to check that
         # it is authorized. It already is by this point; answer with an empty result.
         if wire.length == 4 and (str)wire == "0000": return binary_reply(b"", "application/x-git-receive-pack-result")
@@ -361,6 +372,18 @@ struct App:
             used += git.encode_packet(git.PacketKind.data, text.bytes, output[used..]) catch: return reply("internal error", 500)
         used += git.encode_packet(git.PacketKind.flush, b"", output[used..]) catch: return reply("internal error", 500)
         return binary_reply(output[..<used], "application/x-git-receive-pack-result")
+
+## A smart-HTTP request body Git sent with `Content-Encoding: gzip`, inflated into a
+## heap allocation the caller releases and capped at the same `limit` as an
+## uncompressed body; none when the body is not encoded.
+func inflated_body(request: const http.Request*, received: const u8[], limit: usize) -> u8[]?!:
+    let encoding = (request.header("Content-Encoding") catch: error(auth.invalid, "invalid content encoding")) else return none
+    if encoding.length == 0 or encoding == "identity": return none
+    if encoding != "gzip" and encoding != "x-gzip": error(prism.unsupported, "unsupported content encoding")
+    return gzip.inflate(received, limit) catch: error(auth.invalid, "invalid gzip body")
+
+func release_inflated(inflated: u8[]?):
+    if let bytes = inflated: free(bytes) in memory.heap
 
 ## Anonymous clone and fetch do real work per request, so only a few run at once.
 struct Readers:

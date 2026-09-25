@@ -75,6 +75,12 @@ def package "luce-pkg-server" {
         str path = "../luce-pkg"
     }
 
+    def dependency "luce-compress" {
+        str owner = "dymokomi"
+        str version = "^0.1.0"
+        str path = "../luce-compress"
+    }
+
     def dependency "luce-std" {
         str owner = "dymokomi"
         str version = "^0.1.0"

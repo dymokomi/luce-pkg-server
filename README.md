@@ -28,6 +28,7 @@ package index for Luce and Luce Base, written in Luce Base. MIT OR Apache-2.0.
 | --- | --- |
 | `src/luce_pkg_server/registry.lucb` | HTTP routes and the process |
 | `src/luce_pkg_server/repositories.lucb` | repositories, objects, refs, Smart HTTP, tag releases |
+| `src/luce_pkg_server/gzip.lucb` | gzip request bodies, which stock Git sends for large fetch requests |
 | `src/luce_pkg_server/objects.lucb` | the content-addressed object files beside the database |
 | `src/luce_pkg_server/migrate.lucb` | `luce-pkg-admin migrate`: objects out of the database, once |
 | `src/luce_pkg_server/site.lucb`, `pages.lucb` | the static site: listings, pages, source browser |

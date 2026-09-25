@@ -2,6 +2,7 @@
 """Object storage through stock Git: a large object, and concurrent pushes and release
 tags while the timer's online checkpoint bakes the database. No push may be refused."""
 import concurrent.futures
+import gzip
 import http.client
 import json
 import os
@@ -17,8 +18,8 @@ registry, admin, fixture = [Path(value).resolve() for value in sys.argv[1:4]]
 TOKEN = 'integration-store-token'
 
 
-def request(port, method, path, value=None, headers=None):
-    payload = json.dumps(value).encode() if value is not None else b''
+def request(port, method, path, value=None, headers=None, raw=None):
+    payload = raw if raw is not None else json.dumps(value).encode() if value is not None else b''
     connection = http.client.HTTPConnection('127.0.0.1', port, timeout=300)
     try:
         connection.request(method, path, payload, headers or {})
@@ -169,6 +170,33 @@ with tempfile.TemporaryDirectory(prefix='registry-storage-', dir='/tmp') as temp
                 assert (root / f'{name}-clone/data.bin').read_bytes() == files['data.bin']
                 assert (root / 'site/testadmin' / name / '1.0.0.pack').is_file()
             print(f'PASS three concurrent pushes and releases during {len(bakes)} online checkpoints, none refused', flush=True)
+
+            # A clone wanting many refs makes stock Git gzip its upload-pack request.
+            work, git_environment = client.repository('tagged', {'README.md': b'# tagged\n'})
+            for index in range(180):
+                (work / 'count.txt').write_text(f'{index}\n')
+                for args in (('add', 'count.txt'), ('commit', '-qm', f'step {index}'), ('tag', f'step-{index:03}')):
+                    subprocess.run(['git', '-C', str(work), *args], env=git_environment, check=True, capture_output=True)
+            # A push updates at most 64 refs; send the tags in batches.
+            for first in range(0, 180, 60):
+                refs = [f'refs/tags/step-{index:03}' for index in range(first, first + 60)]
+                code, stderr, _ = client.push(work, git_environment, *(['main'] if first == 0 else []), *refs)
+                assert code == 0, stderr
+            tagged = root / 'tagged-clone'
+            client.clone('tagged', tagged)
+            tags = subprocess.run(['git', '-C', str(tagged), 'tag'], check=True, capture_output=True, text=True).stdout.split()
+            assert len(tags) == 180 and (tagged / 'count.txt').read_text() == '179\n', len(tags)
+            print('PASS a full clone of a repository with 180 tags (a gzip request body)', flush=True)
+            # Encoded bodies are bounded like plain ones: a bomb, corruption and an unknown encoding.
+            path = '/git/testadmin/tagged/git-upload-pack'
+            kind = {'Content-Type': 'application/x-git-upload-pack-request'}
+            bomb = gzip.compress(b'0' * (2 * 1048576))
+            assert len(bomb) < 16384
+            assert request(port, 'POST', path, None, {**kind, 'Content-Encoding': 'gzip'}, bomb)[0] == 400
+            assert request(port, 'POST', path, None, {**kind, 'Content-Encoding': 'gzip'}, bomb[:-9] + b'\0' * 9)[0] == 400
+            assert request(port, 'POST', path, None, {**kind, 'Content-Encoding': 'br'}, b'0000')[0] == 415
+            assert request(port, 'GET', '/health') == (200, b'ok')
+            print('PASS gzip bodies are capped at the request limit; corrupt and unknown encodings are refused', flush=True)
         finally:
             if sys.exc_info()[0] is not None:
                 log.flush()
