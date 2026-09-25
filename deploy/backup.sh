@@ -36,7 +36,17 @@ set -a
 # LUCE_REGISTRY_ORIGIN assignments.
 source "$environment_file"
 set +a
-"$admin" checkpoint "$database" >/dev/null
+# As root, checkpoint as the owner of the data directory: a root-run checkpoint would
+# leave a root-owned database and snapshot that the service can no longer open.
+if [[ $EUID -eq 0 ]]; then
+  owner=$(stat -c %U "$data_dir")
+  group=$(stat -c %G "$data_dir")
+  (cd / && setpriv --reuid "$owner" --regid "$group" --clear-groups \
+    env -i PATH=/usr/bin LUCE_REGISTRY_STORE_TOKEN="$LUCE_REGISTRY_STORE_TOKEN" \
+    "$admin" checkpoint "$database" >/dev/null)
+else
+  "$admin" checkpoint "$database" >/dev/null
+fi
 unset LUCE_REGISTRY_STORE_TOKEN LUCE_REGISTRY_ORIGIN
 
 staging=$(mktemp -d "$parent/.luce-pkg-backup.XXXXXX")
