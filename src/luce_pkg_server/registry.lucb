@@ -336,7 +336,7 @@ struct App:
             # The pusher sees only release-rule reasons; the journal keeps every one.
             var log_line: u8[512]
             let logged = format(log_line, f"push to {owner}/{name} refused: {failure.message}\n") catch: recover "push refused (message too long)\n"
-            discard(io.stderr().write(logged) catch: recover ())
+            discard(io.stderr().write(logged) catch: recover 0)
             let explained = failure.message if strings.starts_with(failure.message, "release: ") else ""
             for byte in explained.bytes:
                 if reason_size == reason_buffer.length: break
