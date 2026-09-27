@@ -8,7 +8,10 @@ import os
 import strings
 import files
 import luce_pkg_server.repositories as repositories
+import memory
+import prism
 import luce_pkg_server.migrate as migration
+import luce_pkg_server.site as site_files
 
 func store_token() -> str!:
     let token = os.env((c.str)"LUCE_REGISTRY_STORE_TOKEN") else error(auth.invalid, "LUCE_REGISTRY_STORE_TOKEN is required")
@@ -90,9 +93,60 @@ func migrate(source: str, target: str) -> i32!:
     print(f"migrated {summary.elements} elements, {summary.objects} objects ({summary.object_bytes} bytes), wrote {summary.written} object files, removed {summary.removed}")
     return 0
 
+## Remove the package `owner/name`: its repository (record, refs, object listings and the
+## object files no other repository lists) and everything the site holds for it (index
+## line, release files, versions, package page, source browser), then the front pages.
+## Refuses while another package's latest release depends on it, unless `force`. Like
+## `checkpoint`, a `.sock` path goes through the running owner; a database path needs
+## the registry stopped. The site is `LUCE_REGISTRY_SITE`.
+func remove(path: str, coordinate: str, force: bool) -> i32!:
+    let (owner, name) = strings.split_once(coordinate, "/") else error(auth.invalid, "name the package as owner/name")
+    if not repositories.valid_name(name) or owner.length == 0: error(auth.invalid, "invalid package name")
+    let site = os.env((c.str)"LUCE_REGISTRY_SITE") else error(auth.invalid, "LUCE_REGISTRY_SITE is required")
+    if site.length == 0: error(auth.invalid, "empty LUCE_REGISTRY_SITE")
+    let dependents = try alloc u8[65536] in memory.heap
+    defer free(dependents) in memory.heap
+    let dependents_size = try site_files.dependents(site, owner, name, dependents)
+    if dependents_size > 0:
+        print(f"{coordinate} is a dependency of the latest release of:")
+        print((str)dependents[..<dependents_size - 1])
+        if not force:
+            print("refusing to remove it; pass --force to remove it anyway")
+            return 1
+    let token = try store_token()
+    let online = strings.ends_with(path, ".sock")
+    var database_buffer: u8[1100]
+    let database_path = try format(database_buffer, f"{(str)path.bytes[..<path.length - 5]}") if online else path
+    try repositories.use_objects(database_path)
+    let database = try db.Database.connect(path, token) if online else try db.Database.open(path, token)
+    defer database.release()
+    var removed: repositories.Removal
+    var in_database = true
+    removed = repositories.remove(database.value(), owner, name) catch failure:
+        if failure.code != prism.missing: error(failure.code, failure.message)
+        in_database = false
+        recover repositories.Removal()
+    if not online: discard(try database.value().bake(wait_ms = 60000))
+    let on_site = try site_files.remove_package(site, owner, name)
+    if not in_database and not on_site.listed and not on_site.directory:
+        print(f"{coordinate}: no such package")
+        return 1
+    if in_database:
+        print(f"removed repository {coordinate}: {removed.releases} release tags, {removed.refs} other refs, {removed.objects} objects listed ({removed.deleted} object files deleted, {removed.shared} shared with other repositories kept)")
+    else:
+        print(f"{coordinate} had no repository")
+    let listed = "index entry" if on_site.listed else "no index entry"
+    if on_site.directory:
+        print(f"removed from the site: {listed}, its directory with {on_site.releases} releases; front pages rewritten")
+    else:
+        print(f"removed from the site: {listed}, no package directory; front pages rewritten")
+    return 0
+
 pub func main(arguments: str[]) -> i32!:
     if arguments.length == 2 and arguments[1] == "token": return try generate_token()
     if arguments.length == 4 and arguments[1] == "migrate": return try migrate(arguments[2], arguments[3])
+    if arguments.length == 4 and arguments[1] == "remove": return try remove(arguments[2], arguments[3], false)
+    if arguments.length == 5 and arguments[1] == "remove" and arguments[4] == "--force": return try remove(arguments[2], arguments[3], true)
     if arguments.length != 3:
         return 2
     if arguments[1] == "init": return try initialize(arguments[2])

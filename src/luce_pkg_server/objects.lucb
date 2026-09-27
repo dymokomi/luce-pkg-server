@@ -6,7 +6,8 @@
 ##
 ## A file is written once: a synced temporary sibling is renamed without replacement and
 ## the directory is synced, so a reader finds the whole object or nothing, and a crash
-## leaves at most a stray `.luce-*` temporary. Files are never modified. An existing file
+## leaves at most a stray `.luce-*` temporary. Files are never modified, and deleted only when
+## an operator removes the last repository listing them. An existing file
 ## with other bytes for the same id is refused as an identity collision, never replaced.
 import c
 import files
@@ -142,3 +143,14 @@ pub func exists(root: str, id: const u8[]) -> bool!:
     let name = try strings.copy(location.path())
     defer strings.release(name)
     return files.exists((c.str)name)
+
+## Delete object `id`'s file below `root`, once no repository lists it (see
+## `repositories.remove`). False when there was no file. The fan-out directory stays.
+pub func remove(root: str, id: const u8[]) -> bool!:
+    let location = try locate(root, id)
+    let name = try strings.copy(location.path())
+    defer strings.release(name)
+    files.remove_file((c.str)name) catch failure:
+        if failure.code == files.missing: return false
+        error(failure.code, failure.message)
+    return true

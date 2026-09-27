@@ -7,4 +7,5 @@ set -euo pipefail
 set -a; source /etc/luce-pkg-server/environment; set +a
 exec setpriv --reuid luce-pkg --regid luce-pkg --clear-groups \
   env -i PATH=/usr/bin LUCE_REGISTRY_STORE_TOKEN="$LUCE_REGISTRY_STORE_TOKEN" LUCE_REGISTRY_ORIGIN="$LUCE_REGISTRY_ORIGIN" \
+  LUCE_REGISTRY_SITE="${LUCE_REGISTRY_SITE:-}" \
   /opt/luce-pkg-server/current/luce-pkg-admin "$@"

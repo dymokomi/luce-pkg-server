@@ -323,3 +323,87 @@ pub func write_package_page(site: str, owner: str, name: str, definition: const 
         var detail = pages.page(html)
         try pages.package_page(&detail, &declared, listed, rendered, directory)
         try write_page(directory, html[..<detail.used])
+
+## The packages whose latest release depends on `owner/name`, as `owner/name` lines in
+## `output`; returns the bytes used. Only the index's packages are considered.
+pub func dependents(site: str, owner: str, name: str, output: u8[]) -> usize!:
+    let index_path = try paths.join(site, "index")
+    defer strings.release(index_path)
+    let listing = try read_listing(index_path)
+    defer discard_listing(listing)
+    var text = Text(bytes = output)
+    var start: usize
+    for end in 0..<listing.length:
+        if listing[end] != '\n': continue
+        let line = (str)listing[start..<end]
+        start = end + 1
+        let (coordinate, rest) = strings.split_once(line, "\t") else continue
+        let (latest, _) = strings.split_once(rest, "\t") else continue
+        var relative: u8[400]
+        let definition_path = try paths.join(site, try format(relative, f"{coordinate}/{latest}.prisma"))
+        defer strings.release(definition_path)
+        let bytes = try read_listing(definition_path)
+        defer discard_listing(bytes)
+        var declared = pkg.decode_package(bytes) catch: continue
+        defer declared.close()
+        if declared.owner == owner and declared.name == name: continue
+        for i in 0..<declared.dependency_count:
+            let requirement = try declared.dependency_at(i)
+            if requirement.name != name: continue
+            if requirement.owner.length > 0 and requirement.owner != owner: continue
+            try text.put(coordinate)
+            try text.put("\n")
+            break
+    return text.used
+
+## What `remove_package` took off the site.
+pub struct SiteRemoval:
+    pub var listed: bool
+    pub var releases: usize
+    pub var directory: bool
+
+## Take `owner/name` off the public site: its index line, then its directory (release
+## packs, definitions, notes, `versions`, the package page and the source browser),
+## then rewrite the front and kind pages from the shortened index.
+pub func remove_package(site: str, owner: str, name: str) -> SiteRemoval!:
+    var result: SiteRemoval
+    var coordinate_buffer: u8[160]
+    let coordinate = try format(coordinate_buffer, f"{owner}/{name}")
+    let index_path = try paths.join(site, "index")
+    defer strings.release(index_path)
+    let index = try read_listing(index_path)
+    defer discard_listing(index)
+    let buffer = try alloc u8[max_listing] in memory.heap
+    defer free(buffer) in memory.heap
+    var listing = Text(bytes = buffer)
+    var start: usize
+    for end in 0..<index.length:
+        if index[end] != '\n': continue
+        let line = (str)index[start..<end]
+        start = end + 1
+        if line.length > coordinate.length and strings.starts_with(line, coordinate) and line.bytes[coordinate.length] == '\t':
+            result.listed = true
+            continue
+        try listing.put(line)
+        try listing.put("\n")
+    if result.listed:
+        let index_z = try terminated(index_path)
+        defer strings.release(index_z)
+        try files.write_atomic((c.str)index_z, buffer[..<listing.used], synchronize = true)
+    let owner_directory = try paths.join(site, owner)
+    defer strings.release(owner_directory)
+    let directory = try paths.join(owner_directory, name)
+    defer strings.release(directory)
+    let directory_z = try terminated(directory)
+    defer strings.release(directory_z)
+    if files.exists((c.str)directory_z):
+        let versions_path = try paths.join(directory, "versions")
+        defer strings.release(versions_path)
+        let versions = try read_listing(versions_path)
+        defer discard_listing(versions)
+        for byte in versions:
+            if byte == '\n': result.releases += 1
+        try files.remove_tree((c.str)directory_z)
+        result.directory = true
+    try ensure_front_page(site)
+    return result

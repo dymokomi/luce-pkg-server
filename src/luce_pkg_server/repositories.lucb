@@ -1133,3 +1133,106 @@ func apply_refs(database: db.Database*, path: str, principal: str, updates: cons
     if not try commit_unless_raced(tx.value()): return false
     try committed(database, updates.length * (max_ref_name + 64))
     return true
+
+## What `remove` took out of the database and the object files.
+pub struct Removal:
+    ## Branches and ordinary tags, then release tags (`refs/tags/v<version>`).
+    pub var refs: usize
+    pub var releases: usize
+    ## Objects the repository listed; of those, files deleted and files kept because
+    ## another repository lists the same id.
+    pub var objects: usize
+    pub var deleted: usize
+    pub var shared: usize
+
+## Remove `owner/name` from the database: its record, refs and object listings in one
+## transaction (removing the repository element removes everything below it), then the
+## object files no other repository lists. Pull requests and credentials hold no state
+## under the repository. The site's files are `site.remove_package`'s job.
+##
+## Operator-only: `luce-pkg-admin remove`. Online, a push to another repository that
+## lists one of these ids in the moment between the check and the deletion would find
+## its file gone; run it offline (against the database path) for a guarantee.
+pub func remove(database: db.Database*, owner: str, name: str) -> Removal!:
+    var path_buffer: u8[192]
+    let path = try repo_path(owner, owner, name, path_buffer)
+    var refs_buffer: u8[208]
+    let refs_root = try join([path, "/refs"], refs_buffer)
+    var objects_buffer: u8[208]
+    let objects_root = try join([path, "/objects"], objects_buffer)
+    var result: Removal
+    var ids: u8[]
+    defer release_ids(&ids)
+    if true:
+        let snapshot = try database.snapshot()
+        defer snapshot.release()
+        let session = snapshot.value()
+        if not try session.contains(path): error(prism.missing, "no such repository")
+        try require_owner(session, path, owner)
+        if try session.contains(refs_root):
+            let refs = try session.children(refs_root)
+            defer refs.release()
+            for i in 0..<refs.value().count():
+                let label = try session.get(try refs.value().at(i), "name")
+                defer label.release()
+                if release_version(try label.value().text_at()).length > 0:
+                    result.releases += 1
+                else:
+                    result.refs += 1
+        let listed = try session.children(objects_root)
+        defer listed.release()
+        result.objects = listed.value().count()
+        if result.objects > 0: ids = try alloc u8[result.objects * 20] in memory.heap
+        for i in 0..<result.objects:
+            let location = try listed.value().at(i)
+            if location.length < 40: error(prism.invalid, "invalid stored object listing")
+            try git.decode_id((str)location.bytes[location.length - 40..], ids[i * 20..<i * 20 + 20])
+    var removed = false
+    for attempt in 0..<commit_attempts:
+        let tx = try database.begin()
+        defer tx.release()
+        if not try tx.value().contains(path): error(prism.missing, "no such repository")
+        try tx.value().remove(path)
+        if try commit_unless_raced(tx.value()):
+            removed = true
+            break
+    if not removed: error(prism.conflict, "repository removal kept meeting concurrent writes")
+    try committed(database, path.length + 256)
+    # Content addressing shares a file among every repository that lists its id; only
+    # ids no remaining repository lists lose their file.
+    let snapshot = try database.snapshot()
+    defer snapshot.release()
+    let session = snapshot.value()
+    let others = try alloc u8[256 * 192] in memory.heap
+    defer free(others) in memory.heap
+    var other_lengths: usize[256]
+    var other_count: usize = 0
+    let owners = try session.children("/repositories")
+    defer owners.release()
+    for i in 0..<owners.value().count():
+        let repositories_of_owner = try session.children(try owners.value().at(i))
+        defer repositories_of_owner.release()
+        for j in 0..<repositories_of_owner.value().count():
+            let other = try repositories_of_owner.value().at(j)
+            if other_count == other_lengths.length or other.length > 192: error(prism.invalid, "too many repositories to check shared objects")
+            for k in 0..<other.length: others[other_count * 192 + k] = other.bytes[k]
+            other_lengths[other_count] = other.length
+            other_count += 1
+    let root = try object_files.configured_root()
+    for i in 0..<result.objects:
+        let id = ids[i * 20..<i * 20 + 20]
+        var shared = false
+        for j in 0..<other_count:
+            var location_buffer: u8[256]
+            let location = try object_path((str)others[j * 192..<j * 192 + other_lengths[j]], id, location_buffer)
+            if try session.contains(location):
+                shared = true
+                break
+        if shared:
+            result.shared += 1
+            continue
+        if try object_files.remove(root, id): result.deleted += 1
+    return result
+
+func release_ids(ids: u8[]*):
+    if ids.length > 0: free(*ids) in memory.heap

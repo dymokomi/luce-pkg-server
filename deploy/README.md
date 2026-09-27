@@ -145,6 +145,24 @@ sudo install -m 0644 deploy/host/luce-pkg-checkpoint.service deploy/host/luce-pk
 sudo systemctl daemon-reload && sudo systemctl enable --now luce-pkg-checkpoint.timer
 ```
 
+## Removing a package
+
+Nothing is deleted by a push. An operator removes a package through the running
+owner's socket (or, with the registry stopped, the database path):
+
+```sh
+sudo /usr/local/sbin/luce-pkg-admin-run remove /var/lib/luce-pkg-server/registry.db.sock owner/name
+```
+
+It removes the repository (record, refs, object listings), the object files no other
+repository lists, and everything the site holds for the package: its `index` line,
+release packs, definitions and notes, `versions`, package page and source browser;
+then it rewrites the front pages. It refuses while another package's latest release
+depends on the package, printing those packages; `--force` removes it anyway. The
+wrapper passes `LUCE_REGISTRY_SITE` from the environment file. Released versions are
+otherwise immutable, so a removed name can be created again but its old versions are
+gone for good, including from any `luc.lock` that pinned them.
+
 ## Abuse and bandwidth limits
 
 `deploy/host/` holds what runs on the VPS itself, outside the registry:
