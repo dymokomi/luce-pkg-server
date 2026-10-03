@@ -58,7 +58,12 @@ def main():
         run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/migration.py"), output / "registry", output / "admin", output / "legacy-fixture"], timeout=timeout)
         if mode in PUBLISH_MODES:
             # luc, at bootstrap/LUC beside this repository, publishing to this registry
-            run([args.base.resolve(), "build", ROOT.parent / "luce-luc/src/main.lucb", "--native", "-o", output / "luc"])
+            luc = ROOT.parent / "luce-luc"
+            pinned = (ROOT / "bootstrap/LUC").read_text().strip()
+            found = subprocess.check_output(["git", "-C", str(luc), "rev-parse", "HEAD"], text=True).strip()
+            if found != pinned:
+                raise SystemExit(f"{luc}: expected {pinned}, found {found}")
+            run([args.base.resolve(), "build", luc / "src/main.lucb", "--native", "-o", output / "luc"])
             run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/publish.py"), output / "registry", output / "account-fixture", output / "luc"], timeout=timeout * 2)
         print(f"PASS {mode}", flush=True)
     print("PASS all selected compiler modes", flush=True)
