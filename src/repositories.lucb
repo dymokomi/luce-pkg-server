@@ -747,6 +747,9 @@ pub func get_ref(database: db.Database*, principal: str, owner: str, name: str, 
 struct GraphNode:
     var id: u8[20]
     var kind: u8
+    ## A ref target the repository already held: validated, with all it reaches, when
+    ## its own push landed, so a walk stops there.
+    var trusted: bool
 
 pub let receive_capabilities = "report-status delete-refs atomic ofs-delta object-format=sha1"
 pub let fetch_capabilities = "ofs-delta no-progress object-format=sha1"
@@ -908,6 +911,12 @@ struct Graph:
                 return
             bucket = (bucket + 1) & (graph_slots - 1)
 
+    ## Add `id` as a trusted node: the walk neither reads it nor follows its references.
+    mutating func trust(id: const u8[]) -> !:
+        if try self.contains(id): return
+        try self.add(id, 0)
+        self.nodes[self.count - 1].trusted = true
+
     mutating func add_hex(id: str, kind: u8) -> !:
         var bytes: u8[20]
         try git.decode_id(id, bytes)
@@ -917,6 +926,9 @@ struct Graph:
         var at: usize = 0
         var total: usize = 0
         while at < self.count:
+            if self.nodes[at].trusted:
+                at += 1
+                continue
             let value = try checked_object(session, path, self.nodes[at].id)
             defer value.release()
             let bytes = value.value().bytes()
@@ -942,6 +954,13 @@ struct Graph:
                 let tag = try git.decode_tag(object.payload)
                 try self.add_hex(tag.object, try kind_code(tag.kind))
             at += 1
+        # a pushed object that names a trusted one says what type it is: that still holds
+        for i in 0..<self.count:
+            if not self.nodes[i].trusted or self.nodes[i].kind == 0: continue
+            let held = try checked_object(session, path, self.nodes[i].id)
+            defer held.release()
+            if try kind_code(try git.decode_object(held.value().bytes()).kind) != self.nodes[i].kind:
+                error(prism.invalid, "graph target type mismatch")
 
 struct FetchLease:
     var value: interop.Reference[prism.Value]?
@@ -1101,6 +1120,11 @@ func apply_refs(database: db.Database*, path: str, principal: str, updates: cons
         defer label.release()
         let current = try label.value().text_at()
         if not valid_ref(current): error(prism.invalid, "invalid stored ref name")
+        # what the repository's refs reach was checked when they were published: the walk
+        # below covers the pushed objects only, not the whole history again
+        let held = try read_ref(tx.value(), child, current)
+        defer held.release()
+        try graph.trust(held.value().bytes())
         if replaced(current, updates): continue
         retained += 1
         for update in updates:
