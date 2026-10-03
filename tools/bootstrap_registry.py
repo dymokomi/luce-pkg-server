@@ -45,6 +45,8 @@ def main():
          "-I", base / "runtime", base / "bootstrap" / f"luce-base-{host}.c",
          base / "runtime/lucb_rt.c", "-lm", "-pthread", "-o", OUT / "stage0"])
     run([OUT / "stage0", "build", base / "src/main.lucb", "--native", "-o", OUT / "luce-base"])
+    # Luce 0.8.30+ embeds the Base compiler it was built with (a generated, ignored file).
+    run(["python3", luce / "tools/embed_toolchain.py", OUT / "luce-base"])
     run([OUT / "luce-base", "build", luce / "src/main.lucb", "--native", "-o", OUT / "luce"])
 
 
