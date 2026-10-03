@@ -34,7 +34,8 @@ def main():
                         (ROOT.parent / "luce-json", "JSON"),
                         (ROOT.parent / "luce-git", "GIT"),
                         (ROOT.parent / "luce-http-client", "HTTP_CLIENT"),
-                        (ROOT.parent / "luce-compress", "COMPRESS")):
+                        (ROOT.parent / "luce-compress", "COMPRESS"),
+                        (ROOT.parent / "luce-luc", "LUC")):
         expected = (ROOT / "bootstrap" / pin).read_text().strip()
         actual = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
         if subprocess.check_output(["git", "-C", str(source), "status", "--porcelain"]):

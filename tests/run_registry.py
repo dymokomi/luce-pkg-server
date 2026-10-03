@@ -8,6 +8,8 @@ import subprocess
 ROOT = Path(__file__).resolve().parents[1]
 MODES = {f"native{i}": ["--native", "--opt", str(i)] for i in range(4)}
 MODES.update({"c": ["--backend=c"], "c-release": ["--backend=c", "--release"]})
+# a release of 72 MiB through luc is slow to repeat: once per backend
+PUBLISH_MODES = ("native3", "c-release")
 
 
 def main():
@@ -54,6 +56,10 @@ def main():
         run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/storage.py"), output / "registry", output / "admin", output / "account-fixture"], timeout=timeout)
         run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/remove.py"), output / "registry", output / "admin", output / "account-fixture"], timeout=timeout)
         run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/migration.py"), output / "registry", output / "admin", output / "legacy-fixture"], timeout=timeout)
+        if mode in PUBLISH_MODES:
+            # luc, at bootstrap/LUC beside this repository, publishing to this registry
+            run([args.base.resolve(), "build", ROOT.parent / "luce-luc/src/main.lucb", "--native", "-o", output / "luc"])
+            run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/publish.py"), output / "registry", output / "account-fixture", output / "luc"], timeout=timeout * 2)
         print(f"PASS {mode}", flush=True)
     print("PASS all selected compiler modes", flush=True)
 
