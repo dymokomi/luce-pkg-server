@@ -302,6 +302,13 @@ func release_version(ref_name: str) -> str:
     return version
 
 pub let max_release_pack: usize = 67108864
+## Objects one graph walk, release pack or fetch may hold: a repository whose tree holds
+## more cannot be pushed, released or fetched. 4096 refused luce-browser-engine's tree.
+pub let max_graph_objects: usize = 65536
+## Open-addressed identity slots of a graph walk, twice its objects; a power of two.
+let graph_slots: usize = 131072
+## References one graph walk may follow: tree entries, commit trees and parents.
+let max_graph_edges: usize = 1048576
 
 pub struct TagRelease:
     pub var commit: u8[40]
@@ -413,17 +420,17 @@ func tag_release(database: db.Database*, owner: str, name: str, target: const u8
     if declared.version != version: error(prism.invalid, "release: package.prisma version must match the release tag")
     if declared.readme.length > 0: result.readme_size = try tree_file(session, path, tree_id, declared.readme, readme)
 
-    let nodes = try alloc GraphNode[4096] in memory.heap
+    let nodes = try alloc GraphNode[max_graph_objects] in memory.heap
     defer free(nodes) in memory.heap
-    let slots = try alloc usize[8192] in memory.heap
+    let slots = try alloc usize[graph_slots] in memory.heap
     defer free(slots) in memory.heap
     for i in 0..<slots.length: slots[i] = 0
     var graph = Graph(nodes = nodes, slots = slots)
     try graph.add(tree_id, 2)
     try graph.validate(session, path)
-    let objects = try alloc git.Object[4097] in memory.heap
+    let objects = try alloc git.Object[max_graph_objects + 1] in memory.heap
     defer free(objects) in memory.heap
-    let leases = try alloc FetchLease[4096] in memory.heap
+    let leases = try alloc FetchLease[max_graph_objects] in memory.heap
     defer free(leases) in memory.heap
     var count: usize = 0
     defer release_fetch_leases(leases, &count)
@@ -558,7 +565,7 @@ func publish_source(database: db.Database*, site_root: str, owner: str, name: st
     defer free(html) in memory.heap
     var title: u8[160]
     let coordinate = try format(title, f"{owner}/{name}")
-    var budget: usize = 4096
+    var budget = max_graph_objects
     try source_directory(snapshot.value(), path, tree, site_root, owner, name, coordinate, version, "", html, 0, &budget)
 
 func push_capabilities(capabilities: str) -> !:
@@ -868,21 +875,21 @@ struct Graph:
 
     mutating func contains(id: const u8[]) -> bool!:
         var bucket: usize = 0
-        for byte in id: bucket = (bucket * 31 + (usize)byte) & 8191
+        for byte in id: bucket = (bucket * 31 + (usize)byte) & (graph_slots - 1)
         while true:
             self.probes += 1
             if self.probes > 16777216: error(prism.invalid, "graph lookup work limit exceeded")
             let slot = self.slots[bucket]
             if slot == 0: return false
             if same(self.nodes[slot - 1].id, id): return true
-            bucket = (bucket + 1) & 8191
+            bucket = (bucket + 1) & (graph_slots - 1)
 
     mutating func add(id: const u8[], kind: u8) -> !:
         if id.length != 20 or zero_id(id): error(prism.invalid, "invalid graph identity")
         self.edges += 1
-        if self.edges > 65536: error(prism.invalid, "graph edge limit exceeded")
+        if self.edges > max_graph_edges: error(prism.invalid, "graph edge limit exceeded")
         var bucket: usize = 0
-        for byte in id: bucket = (bucket * 31 + (usize)byte) & 8191
+        for byte in id: bucket = (bucket * 31 + (usize)byte) & (graph_slots - 1)
         while true:
             self.probes += 1
             if self.probes > 16777216: error(prism.invalid, "graph lookup work limit exceeded")
@@ -899,7 +906,7 @@ struct Graph:
                 if kind != 0 and expected != 0 and kind != expected: error(prism.invalid, "graph object type conflict")
                 if expected == 0: self.nodes[slot - 1].kind = kind
                 return
-            bucket = (bucket + 1) & 8191
+            bucket = (bucket + 1) & (graph_slots - 1)
 
     mutating func add_hex(id: str, kind: u8) -> !:
         var bytes: u8[20]
@@ -962,13 +969,13 @@ pub func upload_pack(database: db.Database*, principal: str, owner: str, name: s
             error(prism.invalid, "unsupported fetch capability")
         start = i + 1
     if request.wants == 0: return 0
-    let nodes = try alloc GraphNode[4096] in memory.heap
+    let nodes = try alloc GraphNode[max_graph_objects] in memory.heap
     defer free(nodes) in memory.heap
-    let slots = try alloc usize[8192] in memory.heap
+    let slots = try alloc usize[graph_slots] in memory.heap
     defer free(slots) in memory.heap
-    let common_nodes = try alloc GraphNode[4096] in memory.heap
+    let common_nodes = try alloc GraphNode[max_graph_objects] in memory.heap
     defer free(common_nodes) in memory.heap
-    let common_slots = try alloc usize[8192] in memory.heap
+    let common_slots = try alloc usize[graph_slots] in memory.heap
     defer free(common_slots) in memory.heap
     for i in 0..<slots.length:
         slots[i] = 0
@@ -1030,9 +1037,9 @@ pub func upload_pack(database: db.Database*, principal: str, owner: str, name: s
         used = try git.encode_packet(git.PacketKind.data, b"NAK\n", output)
     if not request.done: return used
     try common.validate(session, path)
-    let objects = try alloc git.Object[4096] in memory.heap
+    let objects = try alloc git.Object[max_graph_objects] in memory.heap
     defer free(objects) in memory.heap
-    let leases = try alloc FetchLease[4096] in memory.heap
+    let leases = try alloc FetchLease[max_graph_objects] in memory.heap
     defer free(leases) in memory.heap
     var count: usize = 0
     defer release_fetch_leases(leases, &count)
@@ -1078,9 +1085,9 @@ func apply_refs(database: db.Database*, path: str, principal: str, updates: cons
     let tx = try database.begin()
     defer tx.release()
     try require_owner(tx.value(), path, principal)
-    let nodes = try alloc GraphNode[4096] in memory.heap
+    let nodes = try alloc GraphNode[max_graph_objects] in memory.heap
     defer free(nodes) in memory.heap
-    let slots = try alloc usize[8192] in memory.heap
+    let slots = try alloc usize[graph_slots] in memory.heap
     defer free(slots) in memory.heap
     for i in 0..<slots.length: slots[i] = 0
     var graph = Graph(nodes = nodes, slots = slots)

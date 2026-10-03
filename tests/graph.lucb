@@ -83,13 +83,13 @@ func cases(database: db.Database*) -> !:
     let after = try database.snapshot()
     defer after.release()
     assert(try before.value().revision() == try after.value().revision())
-    # The root plus 4096 distinct child IDs must hit the object bound before
-    # loading the intentionally absent children. This tests bounded traversal.
-    let wide = try alloc u8[131072] in memory.heap
+    # The root plus max_graph_objects distinct child IDs must hit the object bound
+    # before loading the intentionally absent children. This tests bounded traversal.
+    let wide = try alloc u8[repositories.max_graph_objects * 32] in memory.heap
     defer free(wide) in memory.heap
     n = 0
     let digits = b"0123456789abcdef"
-    for i in 0..<(usize)4096:
+    for i in 0..<repositories.max_graph_objects:
         var label: u8[4]
         for j in 0..<(usize)4: label[j] = digits[(i >> ((3 - j) * 4)) & 15]
         var child: u8[20]
