@@ -917,6 +917,31 @@ struct Graph:
         try self.add(id, 0)
         self.nodes[self.count - 1].trusted = true
 
+    ## Trust the history of every trusted node: the commits and tags its parents and tag
+    ## targets reach. Only those small objects are read, never trees or blobs, so a push
+    ## whose merge reaches an old fork point still stops at history already published.
+    mutating func trust_history(session: prism.Session*, path: str) -> !:
+        var at: usize = 0
+        while at < self.count:
+            let trusted = self.nodes[at].trusted
+            var id: u8[20]
+            for i in 0..<(usize)20: id[i] = self.nodes[at].id[i]
+            at += 1
+            if not trusted: continue
+            let value = try checked_object(session, path, id)
+            defer value.release()
+            let object = try git.decode_object(value.value().bytes())
+            if object.kind == "commit":
+                let commit = try git.decode_commit(object.payload)
+                for i in 0..<commit.parent_count:
+                    var parent: u8[20]
+                    try git.decode_id(try commit.parent(i), parent)
+                    try self.trust(parent)
+            elif object.kind == "tag":
+                var target: u8[20]
+                try git.decode_id(try git.decode_tag(object.payload).object, target)
+                try self.trust(target)
+
     mutating func add_hex(id: str, kind: u8) -> !:
         var bytes: u8[20]
         try git.decode_id(id, bytes)
@@ -1129,6 +1154,7 @@ func apply_refs(database: db.Database*, path: str, principal: str, updates: cons
         retained += 1
         for update in updates:
             if not zero_id(update.target) and prefix_conflict(current, update.name): error(prism.conflict, "ref prefix conflict")
+    try graph.trust_history(tx.value(), path)
     for update in updates:
         var location_buffer: u8[2304]
         let location = try ref_path(root, update.name, location_buffer)
