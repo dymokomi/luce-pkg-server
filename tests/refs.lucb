@@ -1,8 +1,8 @@
 import repositories
-import db
-import auth
-import prism
-import git
+import luce_db.db
+import luce_auth.auth
+import luce_prism.prism
+import luce_git.git
 import thread
 
 var zero: u8[20]

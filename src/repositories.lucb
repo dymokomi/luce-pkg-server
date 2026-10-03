@@ -1,21 +1,21 @@
 ## Internal repository storage. Principal MUST come from verified authentication,
 ## never from a request field. Ref updates require bounded graph closure; object
 ## uploads alone do not validate graph edges or publish refs.
-import db
+import luce_db.db
 import c
-import files
-import paths
-import prism
+import luce_std.files
+import luce_std.paths
+import luce_prism.prism
 import interop
-import git
+import luce_git.git
 import strings
 import memory
-import pkg
+import luce_pkg.pkg
 import time
-import utf8
-import luce_pkg_server.site as site
-import luce_pkg_server.pages as pages
-import luce_pkg_server.objects as object_files
+import luce_std.utf8
+import site
+import pages
+import objects as object_files
 
 pub let max_object_bytes: usize = 67108864
 pub let max_pull_requests: usize = 256

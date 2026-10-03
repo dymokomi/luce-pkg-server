@@ -1,89 +1,70 @@
 #prisma 4.0
 def package "luce-pkg-server" {
     str owner = "dymokomi"
-    str version = "0.2.3"
+    str version = "0.3.0"
     str kind = "package"
     str language = "luce-base"
     str description = "The registry behind pkg.luciaos.com: a Git host and package index for Luce and Luce Base."
     str readme = "README.md"
-
-    def export "registry" {
-        str module = "luce_pkg_server.registry"
-    }
-
-    def export "admin" {
-        str module = "luce_pkg_server.admin"
-    }
-
-    def export "repositories" {
-        str module = "luce_pkg_server.repositories"
-    }
-
-    def export "http_credentials" {
-        str module = "luce_pkg_server.http_auth"
-    }
-
-    def export "rate_limit" {
-        str module = "luce_pkg_server.rate_limit"
-    }
+    str[] public = ["admin", "http_auth", "rate_limit", "registry", "repositories"]
 
     def dependency "luce-server" {
         str owner = "dymokomi"
-        str version = "^0.1.0"
+        str version = "^0.2.0"
         str path = "../luce-server"
     }
 
     def dependency "luce-db" {
         str owner = "dymokomi"
-        str version = "^0.1.0"
+        str version = "^0.2.0"
         str path = "../luce-db"
     }
 
     def dependency "luce-auth" {
         str owner = "dymokomi"
-        str version = "^0.1.0"
+        str version = "^0.3.0"
         str path = "../luce-auth"
     }
 
     def dependency "luce-json" {
         str owner = "dymokomi"
-        str version = "^0.2.0"
+        str version = "^0.3.0"
         str path = "../luce-json"
     }
 
     def dependency "luce-prism" {
         str owner = "dymokomi"
-        str version = "^0.1.0"
+        str version = "^0.2.0"
         str path = "../luce-prism"
     }
 
     def dependency "luce-git" {
         str owner = "dymokomi"
-        str version = "^0.1.0"
+        str version = "^0.2.0"
         str path = "../luce-git"
     }
 
     def dependency "luce-crypto" {
         str owner = "dymokomi"
-        str version = "^0.1.0"
+        str version = "^0.2.0"
         str path = "../luce-crypto"
     }
 
     def dependency "luce-pkg" {
         str owner = "dymokomi"
-        str version = "^0.1.0"
+        str version = "^0.3.0"
         str path = "../luce-pkg"
     }
 
     def dependency "luce-compress" {
         str owner = "dymokomi"
-        str version = "^0.1.0"
+        str version = "^0.4.0"
         str path = "../luce-compress"
     }
 
     def dependency "luce-std" {
         str owner = "dymokomi"
-        str version = "^0.1.0"
+        str version = "^0.2.0"
         str path = "../luce-std"
     }
 }

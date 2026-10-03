@@ -1,5 +1,5 @@
-import auth
-import http_credentials as http_auth
+import luce_auth.auth
+import http_auth
 
 func rejected(header: str):
     var output: u8[128]

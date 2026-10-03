@@ -4,9 +4,9 @@
 ## against its CRC-32 and size trailer. The inflated size is capped by the caller's
 ## request limit, so a small body cannot expand past what an uncompressed one may be.
 import memory
-import compress
-import compress_native as codec
-import prism
+import luce_compress.compress
+import luce_compress.native as codec
+import luce_prism.prism
 
 let header_crc_flag: u8 = 2
 let extra_flag: u8 = 4

@@ -34,8 +34,8 @@ def main():
         output = ROOT / "build" / mode
         output.mkdir(parents=True, exist_ok=True)
         print(f"MODE {mode}", flush=True)
-        run([args.base.resolve(), "build", ROOT / "src/luce_pkg_server/registry.lucb", *flags, "-o", output / "registry"])
-        run([args.base.resolve(), "build", ROOT / "src/luce_pkg_server/admin.lucb", *flags, "-o", output / "admin"])
+        run([args.base.resolve(), "build", ROOT / "src/registry.lucb", *flags, "-o", output / "registry"])
+        run([args.base.resolve(), "build", ROOT / "src/admin.lucb", *flags, "-o", output / "admin"])
         run([args.base.resolve(), "build", ROOT / "tests/http_auth.lucb", *flags, "-o", output / "http-auth"])
         run([args.base.resolve(), "build", ROOT / "tests/rate_limit.lucb", *flags, "-o", output / "rate-limit"])
         run([args.base.resolve(), "build", ROOT / "tests/account_fixture.lucb", *flags, "-o", output / "account-fixture"])

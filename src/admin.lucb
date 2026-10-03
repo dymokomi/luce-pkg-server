@@ -1,17 +1,17 @@
 ## Local registry operator commands. The store token is accepted only through
 ## the process environment; it is never an argument or public HTTP credential.
-import auth
+import luce_auth.auth
 import c
-import crypto_native as crypto
-import db
+import luce_crypto.native as crypto
+import luce_db.db
 import os
 import strings
-import files
-import luce_pkg_server.repositories as repositories
+import luce_std.files
+import repositories
 import memory
-import prism
-import luce_pkg_server.migrate as migration
-import luce_pkg_server.site as site_files
+import luce_prism.prism
+import migrate as migration
+import site as site_files
 
 func store_token() -> str!:
     let token = os.env((c.str)"LUCE_REGISTRY_STORE_TOKEN") else error(auth.invalid, "LUCE_REGISTRY_STORE_TOKEN is required")

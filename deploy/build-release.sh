@@ -42,10 +42,10 @@ cleanup() { [[ -z "${staging:-}" ]] || rm -rf -- "$staging"; }
 trap cleanup EXIT
 
 LUCE_STD=$standard LUCE_CACHE=$cache "$compiler" build \
-  "$root/src/luce_pkg_server/registry.lucb" --native --release \
+  "$root/src/registry.lucb" --native --release \
   -o "$staging/luce-pkg-server"
 LUCE_STD=$standard LUCE_CACHE=$cache "$compiler" build \
-  "$root/src/luce_pkg_server/admin.lucb" --native --release \
+  "$root/src/admin.lucb" --native --release \
   -o "$staging/luce-pkg-admin"
 
 install -m 0644 "$root/deploy/luce-pkg-server.service" "$staging/"

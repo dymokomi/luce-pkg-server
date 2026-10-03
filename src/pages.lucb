@@ -2,12 +2,12 @@
 ## the shared stylesheets in /assets apply unchanged. Pages are complete without
 ## JavaScript; assets/packages.js only adds filtering to the index.
 import c
-import files
+import luce_std.files
 import memory
-import paths
+import luce_std.paths
 import strings
-import pkg
-import prism
+import luce_pkg.pkg
+import luce_prism.prism
 
 pub let max_page: usize = 2097152
 pub let max_readme: usize = 262144

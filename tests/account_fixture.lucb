@@ -1,6 +1,6 @@
 ## Disposable integration-test accounts only; not an administrative CLI. Bootstraps the
 ## first user and prints two invitation codes for the harness to redeem.
-import auth
+import luce_auth.auth
 
 pub func main(arguments: str[]) -> i32!:
     assert(arguments.length == 2)

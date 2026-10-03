@@ -5,13 +5,13 @@
 ##   <site>/<owner>/<name>/<version>.prisma   that commit's package.prisma
 ## Release files are immutable. Everything here is derived from repository state.
 import c
-import files
+import luce_std.files
 import memory
-import paths
+import luce_std.paths
 import strings
-import pkg
-import prism
-import luce_pkg_server.pages as pages
+import luce_pkg.pkg
+import luce_prism.prism
+import pages
 
 let max_listing: usize = 4194304
 

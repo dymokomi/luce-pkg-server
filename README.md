@@ -26,13 +26,13 @@ package index for Luce and Luce Base, written in Luce Base. MIT OR Apache-2.0.
 
 | Path | What |
 | --- | --- |
-| `src/luce_pkg_server/registry.lucb` | HTTP routes and the process |
-| `src/luce_pkg_server/repositories.lucb` | repositories, objects, refs, Smart HTTP, tag releases |
-| `src/luce_pkg_server/gzip.lucb` | gzip request bodies, which stock Git sends for large fetch requests |
-| `src/luce_pkg_server/objects.lucb` | the content-addressed object files beside the database |
-| `src/luce_pkg_server/migrate.lucb` | `luce-pkg-admin migrate`: objects out of the database, once |
-| `src/luce_pkg_server/site.lucb`, `pages.lucb` | the static site: listings, pages, source browser |
-| `src/luce_pkg_server/admin.lucb` | `luce-pkg-admin`: store token, init, invite, checkpoint, migrate, remove |
+| `src/registry.lucb` | HTTP routes and the process |
+| `src/repositories.lucb` | repositories, objects, refs, Smart HTTP, tag releases |
+| `src/gzip.lucb` | gzip request bodies, which stock Git sends for large fetch requests |
+| `src/objects.lucb` | the content-addressed object files beside the database |
+| `src/migrate.lucb` | `luce-pkg-admin migrate`: objects out of the database, once |
+| `src/site.lucb`, `pages.lucb` | the static site: listings, pages, source browser |
+| `src/admin.lucb` | `luce-pkg-admin`: store token, init, invite, checkpoint, migrate, remove |
 | `deploy/` | systemd unit, Caddyfile, host limits, backup and restore, the release bundle builder |
 | `docs/CONTRACTS.md` | the decisions the design rests on |
 

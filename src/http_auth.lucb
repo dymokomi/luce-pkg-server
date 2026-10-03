@@ -1,6 +1,6 @@
 ## Strict HTTP Basic decoding for stock Git credentials. Returned strings borrow
 ## the caller-provided output buffer and must not outlive it.
-import auth
+import luce_auth.auth
 import strings
 
 pub struct BasicCredentials:

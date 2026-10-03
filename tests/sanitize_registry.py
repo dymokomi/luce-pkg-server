@@ -22,8 +22,8 @@ runtime = ROOT.parent / 'luce-base/runtime'
 def run(command):
     subprocess.run(list(map(str, command)), cwd=ROOT, env=env, check=True, timeout=600)
 
-for source, name in [('src/luce_pkg_server/registry.lucb', 'registry'),
-                     ('src/luce_pkg_server/admin.lucb', 'admin'),
+for source, name in [('src/registry.lucb', 'registry'),
+                     ('src/admin.lucb', 'admin'),
                      ('tests/http_auth.lucb', 'http-auth'),
                      ('tests/rate_limit.lucb', 'rate-limit'),
                      ('tests/account_fixture.lucb', 'account-fixture')]:

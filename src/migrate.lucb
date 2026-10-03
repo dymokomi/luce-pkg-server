@@ -12,13 +12,13 @@
 ## leaves whole batches behind, and running it again copies what is missing, rewrites
 ## any object file that is absent, refreshes every other property from the source and
 ## removes what the source no longer holds. A complete run changes nothing further.
-import db
-import git
+import luce_db.db
+import luce_git.git
 import interop
 import memory
-import prism
+import luce_prism.prism
 import strings
-import luce_pkg_server.objects as object_files
+import objects as object_files
 
 pub let max_object_bytes: usize = 67108864
 ## Elements per commit, and the bytes a batch may carry, far below Prism's journal frame.

@@ -10,12 +10,12 @@
 ## an operator removes the last repository listing them. An existing file
 ## with other bytes for the same id is refused as an identity collision, never replaced.
 import c
-import files
+import luce_std.files
 import io
 import memory
 import strings
-import git
-import prism
+import luce_git.git
+import luce_prism.prism
 
 ## The directory of this process's object files, set once at startup by `configure`.
 ## Worker threads only read it, and only after the server has started them.
