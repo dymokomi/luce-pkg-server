@@ -1,15 +1,15 @@
 ## Local registry operator commands. The store token is accepted only through
 ## the process environment; it is never an argument or public HTTP credential.
-import luce_auth.auth
+from luce_auth import auth
 import c
-import luce_crypto.native as crypto
-import luce_db.db
+from luce_crypto import native as crypto
+from luce_db import db
 import os
 import strings
-import luce_std.files
+from luce_std import files
 import repositories
 import memory
-import luce_prism.prism
+from luce_prism import prism
 import migrate as migration
 import site as site_files
 

@@ -2,14 +2,14 @@
 ## object envelopes inside Prism (inline `wire` up to 1 MiB, `chunks-v1` above), for
 ## the migration round trip. Arguments: DATABASE PACK MAIN_COMMIT_HEX. The account is
 ## testadmin / fixture-password; the repository is testadmin/legacy.
-import luce_auth.auth
+from luce_auth import auth
 import c
-import luce_crypto.native as crypto_native
-import luce_db.db
-import luce_std.files
-import luce_git.git
+from luce_crypto import native as crypto_native
+from luce_db import db
+from luce_std import files
+from luce_git import git
 import memory
-import luce_prism.prism
+from luce_prism import prism
 import repositories
 
 let token = "integration-store-token"

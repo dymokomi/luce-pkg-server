@@ -1,4 +1,4 @@
-import luce_auth.auth
+from luce_auth import auth
 import http_auth
 
 func rejected(header: str):

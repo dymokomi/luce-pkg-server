@@ -1,18 +1,17 @@
 ## Internal repository storage. Principal MUST come from verified authentication,
 ## never from a request field. Ref updates require bounded graph closure; object
 ## uploads alone do not validate graph edges or publish refs.
-import luce_db.db
+from luce_db import db
 import c
-import luce_std.files
-import luce_std.paths
-import luce_prism.prism
+from luce_std import files, paths
+from luce_prism import prism
 import interop
-import luce_git.git
+from luce_git import git
 import strings
 import memory
-import luce_pkg.pkg
+from luce_pkg import pkg
 import time
-import luce_std.utf8
+from luce_std import utf8
 import site
 import pages
 import objects as object_files

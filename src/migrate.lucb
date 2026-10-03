@@ -12,11 +12,11 @@
 ## leaves whole batches behind, and running it again copies what is missing, rewrites
 ## any object file that is absent, refreshes every other property from the source and
 ## removes what the source no longer holds. A complete run changes nothing further.
-import luce_db.db
-import luce_git.git
+from luce_db import db
+from luce_git import git
 import interop
 import memory
-import luce_prism.prism
+from luce_prism import prism
 import strings
 import objects as object_files
 
