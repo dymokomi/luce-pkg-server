@@ -175,6 +175,25 @@ language = "luce-base"
     assert refused.returncode != 0
     assert request(port, 'POST', fetch_path, headers=headers)[0] == 415
     assert request(port, 'POST', fetch_path, headers={**headers, 'Content-Type': 'application/x-git-upload-pack-request'})[0] == 400
+    # A history too large for one push is refused with the limit it exceeded, by name or
+    # as the request's size, and goes up one commit at a time (what `luc publish` does).
+    for branch, make in (('large-history', lambda i: os.urandom(24 << 20)),
+                         ('expanded-history', lambda i: bytes([i]) * (30 << 20))):
+        git('checkout', '-q', '--orphan', branch)
+        git('rm', '-q', '-rf', '--cached', '.')
+        for i in range(3):
+            (repo / f'part{i}.bin').write_bytes(make(i))
+            git('add', f'part{i}.bin')
+            git('commit', '-q', '-m', f'part {i}')
+        whole = subprocess.run(['git', '-C', str(repo), 'push', 'origin', f'HEAD:refs/heads/{branch}'],
+                               env=env, capture_output=True, timeout=300)
+        assert whole.returncode != 0, branch
+        assert any(sign in whole.stderr for sign in (b'limit exceeded', b'HTTP 413', b'RPC failed')), whole.stderr[-400:]
+        for commit in git('rev-list', '--reverse', 'HEAD').split():
+            git('push', '-q', 'origin', f'{commit.decode()}:refs/heads/{branch}')
+        for i in range(3):
+            (repo / f'part{i}.bin').unlink()
+        git('checkout', '-q', '-f', 'main')
     # A version tag publishes a static, history-free release; main is left untouched.
     site = root / 'site' / 'testuser' / 'git-wire'
     git('checkout', '-q', '-b', 'release-line')

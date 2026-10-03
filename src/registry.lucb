@@ -339,12 +339,14 @@ struct App:
         let output = alloc u8[270336] in memory.heap catch: return reply("internal error", 500)
         defer free(output) in memory.heap
         var accepted = true
-        # Release-rule failures are reported to the pusher; anything else stays generic.
+        # Release-rule failures and the limits a push exceeded are reported to the pusher, who
+        # can act on them (`luc publish` pushes a long history in steps); anything else stays
+        # generic.
         var reason_buffer: u8[160]
         var reason_size: usize = 0
         discard(repositories.receive_pack(self.database.value(), principal, owner, name, wire, (str)self.site[..<self.site_size]) catch failure:
             accepted = false
-            # The pusher sees only release-rule reasons; the journal keeps every one, as
+            # The pusher sees only those reasons; the journal keeps every one, as
             # one line of plain text whatever bytes the message holds.
             var log_line: u8[512]
             var used = (format(log_line, f"push to {owner}/{name} refused: ") catch: recover "").length
@@ -354,7 +356,7 @@ struct App:
                 used += 1
             log_line[used] = '\n'
             discard(io.stderr().write(log_line[..<used + 1]) catch: recover 0)
-            let explained = failure.message if strings.starts_with(failure.message, "release: ") else ""
+            let explained = failure.message if strings.starts_with(failure.message, "release: ") or strings.ends_with(failure.message, " limit exceeded") else ""
             for byte in explained.bytes:
                 if reason_size == reason_buffer.length: break
                 reason_buffer[reason_size] = byte if byte >= 0x20 and byte < 0x7f else ' '
