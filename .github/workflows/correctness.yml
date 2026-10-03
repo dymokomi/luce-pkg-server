@@ -44,7 +44,7 @@ jobs:
         id: pins
         shell: bash
         run: |
-          for pin in AUTH BASE COMPRESS CRYPTO DB GIT HTTP_CLIENT JSON LUCE PKG PRISM SERVER TLS; do
+          for pin in AUTH BASE COMPRESS CRYPTO DB GIT HTTP_CLIENT JSON LUC LUCE PKG PRISM SERVER TLS; do
             key=$(printf '%s' "$pin" | tr '[:upper:]' '[:lower:]')
             echo "$key=$(cat luce-pkg-server/bootstrap/$pin)" >> "$GITHUB_OUTPUT"
           done
@@ -77,6 +77,8 @@ jobs:
         with: {repository: dymokomi/luce-json, ref: "${{ steps.pins.outputs.json }}", path: luce-json}
       - uses: actions/checkout@v7
         with: {repository: dymokomi/luce, ref: "${{ steps.pins.outputs.luce }}", path: luce}
+      - uses: actions/checkout@v7
+        with: {repository: dymokomi/luce-luc, ref: "${{ steps.pins.outputs.luc }}", path: luce-luc}
       - uses: actions/checkout@v7
         with: {repository: dymokomi/luce-pkg, ref: "${{ steps.pins.outputs.pkg }}", path: luce-pkg}
       - uses: actions/checkout@v7
