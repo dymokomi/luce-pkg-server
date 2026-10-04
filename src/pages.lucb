@@ -3,7 +3,7 @@
 ## JavaScript; assets/packages.js only adds filtering to the index.
 import c
 from luce_std import files
-import memory
+import interop
 from luce_std import paths
 import strings
 from luce_pkg import pkg
@@ -247,16 +247,15 @@ func relative_path(value: str) -> bool:
         start = end + 1
     return true
 
-## One package: description, install command, versions, dependencies and README.
-## `versions` is the package's `versions` file; `readme` is already-rendered HTML.
-func release_notes(directory: str, version: str) -> u8[]!:
+## One release's notes, `<version>.notes` in the package's site directory.
+func release_notes(directory: str, version: str) -> interop.Owned[const u8[]]!:
     var name: u8[96]
     let path = try paths.join(directory, try format(name, f"{version}.notes"))
-    defer strings.release(path)
-    let terminated = try strings.copy(path)
-    defer strings.release(terminated)
-    return try files.read_limit((c.str)terminated, max_notes)
+    defer path.release()
+    return try files.read((c.str)path.value, limit = max_notes)
 
+## One package: description, install command, versions, dependencies and README.
+## `versions` is the package's `versions` file; `readme` is already-rendered HTML.
 ## `directory` is the package's site directory, where each release's notes live.
 pub func package_page(out: Page*, definition: pkg.Definition*, versions: const u8[], readme: str, directory: str) -> !:
     var title: u8[160]
@@ -332,9 +331,9 @@ pub func package_page(out: Page*, definition: pkg.Definition*, versions: const u
         try out.escaped(field(line, ' ', 1))
         try out.put("</code></p>\n")
         let notes = release_notes(directory, version) catch: continue
-        defer free(notes) in memory.heap
+        defer notes.release()
         try out.put("<pre class=\"notes\">")
-        try out.escaped((str)notes)
+        try out.escaped((str)notes.value)
         try out.put("</pre>\n")
     try foot(out)
 

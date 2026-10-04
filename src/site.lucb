@@ -6,6 +6,7 @@
 ## Release files are immutable. Everything here is derived from repository state.
 import c
 from luce_std import files
+import interop
 import memory
 from luce_std import paths
 import strings
@@ -15,14 +16,6 @@ import pages
 
 let max_listing: usize = 4194304
 
-func terminated(path: str) -> str!:
-    return try strings.copy(path)
-
-func ensure_directory(path: str) -> !:
-    let name = try terminated(path)
-    defer strings.release(name)
-    if not files.exists((c.str)name): try files.create_directory((c.str)name)
-
 func same(left: const u8[], right: const u8[]) -> bool:
     if left.length != right.length: return false
     for i in 0..<left.length:
@@ -30,72 +23,59 @@ func same(left: const u8[], right: const u8[]) -> bool:
     return true
 
 ## Publish bytes once. An identical existing file is accepted; a different one is refused.
-func immutable(path: str, bytes: const u8[]) -> !:
-    let name = try terminated(path)
-    defer strings.release(name)
-    if files.exists((c.str)name):
-        let current = try files.read_limit((c.str)name, bytes.length + 1)
-        defer free(current) in memory.heap
-        if not same(current, bytes): error(prism.invalid, "release: this version already exists with different content")
+func immutable(path: c.str, bytes: const u8[]) -> !:
+    if files.exists(path):
+        let current = try files.read(path, limit = bytes.length + 1)
+        defer current.release()
+        if not same(current.value, bytes): error(prism.invalid, "release: this version already exists with different content")
         return
-    try files.write_atomic((c.str)name, bytes, synchronize = true)
+    try files.write_atomic(path, bytes, synchronize = true)
 
-func package_directory(site: str, owner: str, name: str) -> str!:
+## `<site>/<owner>/<name>`, created with its parents if missing.
+func package_directory(site: str, owner: str, name: str) -> interop.Owned[str]!:
     let parent = try paths.join(site, owner)
-    defer strings.release(parent)
-    try ensure_directory(site)
-    try ensure_directory(parent)
-    let directory = try paths.join(parent, name)
-    errdefer strings.release(directory)
-    try ensure_directory(directory)
+    defer parent.release()
+    let directory = try paths.join(parent.value, name)
+    errdefer directory.release()
+    try files.ensure_directory(directory.value)
     return directory
 
-func member(directory: str, version: str, suffix: str) -> str!:
+func member(directory: str, version: str, suffix: str) -> interop.Owned[str]!:
     var buffer: u8[96]
     return try paths.join(directory, try format(buffer, f"{version}{suffix}"))
 
 ## Step one, before the tag ref is committed: the immutable release files.
 pub func publish_files(site: str, owner: str, name: str, version: str, pack: const u8[], definition: const u8[], notes: const u8[]) -> !:
     let directory = try package_directory(site, owner, name)
-    defer strings.release(directory)
-    let pack_path = try member(directory, version, ".pack")
-    defer strings.release(pack_path)
-    try immutable(pack_path, pack)
-    let definition_path = try member(directory, version, ".prisma")
-    defer strings.release(definition_path)
-    try immutable(definition_path, definition)
-    let notes_path = try member(directory, version, ".notes")
-    defer strings.release(notes_path)
-    try immutable(notes_path, notes)
+    defer directory.release()
+    let pack_path = try member(directory.value, version, ".pack")
+    defer pack_path.release()
+    try immutable((c.str)pack_path.value, pack)
+    let definition_path = try member(directory.value, version, ".prisma")
+    defer definition_path.release()
+    try immutable((c.str)definition_path.value, definition)
+    let notes_path = try member(directory.value, version, ".notes")
+    defer notes_path.release()
+    try immutable((c.str)notes_path.value, notes)
 
 ## Write one generated page below a package's site directory, creating its parents.
 ## `relative` is built only from names pages.addressable accepted.
 pub func write_nested(site: str, owner: str, name: str, relative: str, bytes: const u8[]) -> !:
     let directory = try package_directory(site, owner, name)
-    defer strings.release(directory)
-    var current = try strings.copy(directory)
-    defer strings.release(current)
-    var start: usize
-    for end in 0..<relative.length:
-        if relative.bytes[end] != '/': continue
-        let next = try paths.join(current, (str)relative.bytes[start..<end])
-        strings.release(current)
-        current = next
-        try ensure_directory(current)
-        start = end + 1
-    let path = try paths.join(current, (str)relative.bytes[start..])
-    defer strings.release(path)
-    let terminated_path = try terminated(path)
-    defer strings.release(terminated_path)
-    try files.write_atomic((c.str)terminated_path, bytes)
+    defer directory.release()
+    let path = try paths.join(directory.value, relative)
+    defer path.release()
+    try files.ensure_directory(paths.directory(path.value))
+    try files.write_atomic((c.str)path.value, bytes)
 
 ## Rebuild each index line's description and kind from the package's latest definition, so
 ## an index written by an older registry gains what a newer front page shows.
 func refresh_index(site: str) -> !:
     let index_path = try paths.join(site, "index")
-    defer strings.release(index_path)
-    let current = try read_listing(index_path)
-    defer discard_listing(current)
+    defer index_path.release()
+    let index = try read_listing((c.str)index_path.value)
+    defer index.release()
+    let current = index.value
     if current.length == 0: return
     let buffer = try alloc u8[max_listing] in memory.heap
     defer free(buffer) in memory.heap
@@ -109,10 +89,10 @@ func refresh_index(site: str) -> !:
         let (latest, _) = strings.split_once(rest, "\t") else continue
         var relative: u8[400]
         let definition_path = try paths.join(site, try format(relative, f"{coordinate}/{latest}.prisma"))
-        defer strings.release(definition_path)
-        let bytes = try read_listing(definition_path)
-        defer discard_listing(bytes)
-        var declared = pkg.decode_package(bytes) catch:
+        defer definition_path.release()
+        let bytes = try read_listing((c.str)definition_path.value)
+        defer bytes.release()
+        var declared = pkg.decode_package(bytes.value) catch:
             # Keep a line whose definition cannot be read exactly as it was.
             try listing.put(line)
             try listing.put("\n")
@@ -127,32 +107,30 @@ func refresh_index(site: str) -> !:
         try listing.put(kind_of(&declared))
         try listing.put("\n")
     if same(buffer[..<listing.used], current): return
-    let name = try terminated(index_path)
-    defer strings.release(name)
-    try files.write_atomic((c.str)name, buffer[..<listing.used], synchronize = true)
+    try files.write_atomic((c.str)index_path.value, buffer[..<listing.used], synchronize = true)
 
 ## Rewrite the front page from the current package list. Done at every start, so a new
 ## release of the registry refreshes its wording without waiting for a package release.
 pub func ensure_front_page(site: str) -> !:
-    try ensure_directory(site)
+    try files.ensure_directory(site)
     try refresh_index(site)
     let index_path = try paths.join(site, "index")
-    defer strings.release(index_path)
-    let listing = try read_listing(index_path)
-    defer discard_listing(listing)
+    defer index_path.release()
+    let listing = try read_listing((c.str)index_path.value)
+    defer listing.release()
     let html = try alloc u8[pages.max_page] in memory.heap
     defer free(html) in memory.heap
     var front = pages.page(html)
-    try pages.index_page(&front, listing)
+    try pages.index_page(&front, listing.value)
     try write_page(site, html[..<front.used])
     # One page per kind, linked from the tabs at the top of every page.
     for view in ["applications", "tools", "packages"]:
         var kind_page = pages.page(html)
-        try pages.index_page(&kind_page, listing, view)
+        try pages.index_page(&kind_page, listing.value, view)
         let directory_of_view = try paths.join(site, view)
-        defer strings.release(directory_of_view)
-        try ensure_directory(directory_of_view)
-        try write_page(directory_of_view, html[..<kind_page.used])
+        defer directory_of_view.release()
+        try files.ensure_directory(directory_of_view.value)
+        try write_page(directory_of_view.value, html[..<kind_page.used])
 
 ## The kind a package declares: application, tool or package.
 func kind_of(declared: pkg.Definition*) -> str:
@@ -170,21 +148,15 @@ func render_readme(readme: const u8[], output: u8[]) -> usize!:
 
 func write_page(directory: str, bytes: const u8[]) -> !:
     let path = try paths.join(directory, "index.html")
-    defer strings.release(path)
-    let name = try terminated(path)
-    defer strings.release(name)
-    try files.write_atomic((c.str)name, bytes, synchronize = true)
+    defer path.release()
+    try files.write_atomic((c.str)path.value, bytes, synchronize = true)
 
-func read_listing(path: str) -> u8[]!:
-    let name = try terminated(path)
-    defer strings.release(name)
-    if not files.exists((c.str)name):
+## A listing file's bytes, empty when it does not exist yet; the caller releases them.
+func read_listing(path: c.str) -> interop.Owned[const u8[]]!:
+    if not files.exists(path):
         var empty: u8[]
-        return empty
-    return try files.read_limit((c.str)name, max_listing)
-
-func discard_listing(bytes: u8[]):
-    if bytes.length > 0: free(bytes) in memory.heap
+        return interop.Owned[const u8[]](empty)
+    return try files.read(path, limit = max_listing)
 
 func newer(left: pkg.Version, right: pkg.Version) -> bool:
     if left.major != right.major: return left.major > right.major
@@ -215,11 +187,12 @@ pub func publish_listing(site: str, owner: str, name: str, version: str, pack: c
         digest_text[i * 2 + 1] = digits.bytes[(usize)(digest[i] & 15)]
 
     let directory = try package_directory(site, owner, name)
-    defer strings.release(directory)
-    let versions_path = try paths.join(directory, "versions")
-    defer strings.release(versions_path)
-    let current = try read_listing(versions_path)
-    defer discard_listing(current)
+    defer directory.release()
+    let versions_path = try paths.join(directory.value, "versions")
+    defer versions_path.release()
+    let versions = try read_listing((c.str)versions_path.value)
+    defer versions.release()
+    let current = versions.value
     let buffer = try alloc u8[max_listing] in memory.heap
     defer free(buffer) in memory.heap
     var output = Text(bytes = buffer)
@@ -251,21 +224,19 @@ pub func publish_listing(site: str, owner: str, name: str, version: str, pack: c
         try output.put(" ")
         try output.put(commit)
         try output.put("\n")
-        let name_z = try terminated(versions_path)
-        defer strings.release(name_z)
-        try files.write_atomic((c.str)name_z, buffer[..<output.used], synchronize = true)
+        try files.write_atomic((c.str)versions_path.value, buffer[..<output.used], synchronize = true)
 
     var coordinate_buffer: u8[160]
     let coordinate = try format(coordinate_buffer, f"{owner}/{name}")
     let index_path = try paths.join(site, "index")
-    defer strings.release(index_path)
-    let index = try read_listing(index_path)
-    defer discard_listing(index)
+    defer index_path.release()
+    let index = try read_listing((c.str)index_path.value)
+    defer index.release()
     var listing = Text(bytes = buffer)
     start = 0
-    for end in 0..<index.length:
-        if index[end] != '\n': continue
-        let line = (str)index[start..<end]
+    for end in 0..<index.value.length:
+        if index.value[end] != '\n': continue
+        let line = (str)index.value[start..<end]
         start = end + 1
         if line.length > coordinate.length and strings.starts_with(line, coordinate) and line.bytes[coordinate.length] == '\t': continue
         try listing.put(line)
@@ -278,9 +249,7 @@ pub func publish_listing(site: str, owner: str, name: str, version: str, pack: c
     try listing.put("\t")
     try listing.put(kind_of(&declared))
     try listing.put("\n")
-    let index_z = try terminated(index_path)
-    defer strings.release(index_z)
-    try files.write_atomic((c.str)index_z, buffer[..<listing.used], synchronize = true)
+    try files.write_atomic((c.str)index_path.value, buffer[..<listing.used], synchronize = true)
 
     # Pages. The package page describes the latest release, so an older patch release
     # pushed later refreshes only the versions it lists.
@@ -294,9 +263,9 @@ pub func publish_listing(site: str, owner: str, name: str, version: str, pack: c
         var kind_page = pages.page(html)
         try pages.index_page(&kind_page, buffer[..<listing.used], view)
         let directory_of_view = try paths.join(site, view)
-        defer strings.release(directory_of_view)
-        try ensure_directory(directory_of_view)
-        try write_page(directory_of_view, html[..<kind_page.used])
+        defer directory_of_view.release()
+        try files.ensure_directory(directory_of_view.value)
+        try write_page(directory_of_view.value, html[..<kind_page.used])
     if latest_text == version: try write_package_page(site, owner, name, definition, readme)
 
 ## The package page describes the latest release; also rebuilt at registry start.
@@ -304,9 +273,9 @@ pub func write_package_page(site: str, owner: str, name: str, definition: const 
     var declared = try pkg.decode_package(definition)
     defer declared.close()
     let directory = try package_directory(site, owner, name)
-    defer strings.release(directory)
-    let versions_path = try paths.join(directory, "versions")
-    defer strings.release(versions_path)
+    defer directory.release()
+    let versions_path = try paths.join(directory.value, "versions")
+    defer versions_path.release()
     let html = try alloc u8[pages.max_page] in memory.heap
     defer free(html) in memory.heap
     if true:
@@ -318,33 +287,33 @@ pub func write_package_page(site: str, owner: str, name: str, definition: const 
             rendered_size = render_readme(readme, fragment) catch:
                 recover 0
         let rendered = (str)fragment[..<rendered_size]
-        let listed = try read_listing(versions_path)
-        defer discard_listing(listed)
+        let listed = try read_listing((c.str)versions_path.value)
+        defer listed.release()
         var detail = pages.page(html)
-        try pages.package_page(&detail, &declared, listed, rendered, directory)
-        try write_page(directory, html[..<detail.used])
+        try pages.package_page(&detail, &declared, listed.value, rendered, directory.value)
+        try write_page(directory.value, html[..<detail.used])
 
 ## The packages whose latest release depends on `owner/name`, as `owner/name` lines in
 ## `output`; returns the bytes used. Only the index's packages are considered.
 pub func dependents(site: str, owner: str, name: str, output: u8[]) -> usize!:
     let index_path = try paths.join(site, "index")
-    defer strings.release(index_path)
-    let listing = try read_listing(index_path)
-    defer discard_listing(listing)
+    defer index_path.release()
+    let listing = try read_listing((c.str)index_path.value)
+    defer listing.release()
     var text = Text(bytes = output)
     var start: usize
-    for end in 0..<listing.length:
-        if listing[end] != '\n': continue
-        let line = (str)listing[start..<end]
+    for end in 0..<listing.value.length:
+        if listing.value[end] != '\n': continue
+        let line = (str)listing.value[start..<end]
         start = end + 1
         let (coordinate, rest) = strings.split_once(line, "\t") else continue
         let (latest, _) = strings.split_once(rest, "\t") else continue
         var relative: u8[400]
         let definition_path = try paths.join(site, try format(relative, f"{coordinate}/{latest}.prisma"))
-        defer strings.release(definition_path)
-        let bytes = try read_listing(definition_path)
-        defer discard_listing(bytes)
-        var declared = pkg.decode_package(bytes) catch: continue
+        defer definition_path.release()
+        let bytes = try read_listing((c.str)definition_path.value)
+        defer bytes.release()
+        var declared = pkg.decode_package(bytes.value) catch: continue
         defer declared.close()
         if declared.owner == owner and declared.name == name: continue
         for i in 0..<declared.dependency_count:
@@ -370,16 +339,16 @@ pub func remove_package(site: str, owner: str, name: str) -> SiteRemoval!:
     var coordinate_buffer: u8[160]
     let coordinate = try format(coordinate_buffer, f"{owner}/{name}")
     let index_path = try paths.join(site, "index")
-    defer strings.release(index_path)
-    let index = try read_listing(index_path)
-    defer discard_listing(index)
+    defer index_path.release()
+    let index = try read_listing((c.str)index_path.value)
+    defer index.release()
     let buffer = try alloc u8[max_listing] in memory.heap
     defer free(buffer) in memory.heap
     var listing = Text(bytes = buffer)
     var start: usize
-    for end in 0..<index.length:
-        if index[end] != '\n': continue
-        let line = (str)index[start..<end]
+    for end in 0..<index.value.length:
+        if index.value[end] != '\n': continue
+        let line = (str)index.value[start..<end]
         start = end + 1
         if line.length > coordinate.length and strings.starts_with(line, coordinate) and line.bytes[coordinate.length] == '\t':
             result.listed = true
@@ -387,23 +356,19 @@ pub func remove_package(site: str, owner: str, name: str) -> SiteRemoval!:
         try listing.put(line)
         try listing.put("\n")
     if result.listed:
-        let index_z = try terminated(index_path)
-        defer strings.release(index_z)
-        try files.write_atomic((c.str)index_z, buffer[..<listing.used], synchronize = true)
+        try files.write_atomic((c.str)index_path.value, buffer[..<listing.used], synchronize = true)
     let owner_directory = try paths.join(site, owner)
-    defer strings.release(owner_directory)
-    let directory = try paths.join(owner_directory, name)
-    defer strings.release(directory)
-    let directory_z = try terminated(directory)
-    defer strings.release(directory_z)
-    if files.exists((c.str)directory_z):
-        let versions_path = try paths.join(directory, "versions")
-        defer strings.release(versions_path)
-        let versions = try read_listing(versions_path)
-        defer discard_listing(versions)
-        for byte in versions:
+    defer owner_directory.release()
+    let directory = try paths.join(owner_directory.value, name)
+    defer directory.release()
+    if files.exists((c.str)directory.value):
+        let versions_path = try paths.join(directory.value, "versions")
+        defer versions_path.release()
+        let versions = try read_listing((c.str)versions_path.value)
+        defer versions.release()
+        for byte in versions.value:
             if byte == '\n': result.releases += 1
-        try files.remove_tree((c.str)directory_z)
+        try files.remove_tree((c.str)directory.value)
         result.directory = true
     try ensure_front_page(site)
     return result

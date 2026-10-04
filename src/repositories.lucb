@@ -273,8 +273,8 @@ func checked_object(session: prism.Session*, path: str, id: const u8[]) -> inter
         # A listed object without its file is damage, not absence.
         if failure.code == prism.missing: error(prism.invalid, "listed Git object has no file")
         error(failure.code, failure.message)
-    defer free(wire) in memory.heap
-    return try prism.Value.array(prism.DType.uint8, [(i64)wire.length], wire)
+    defer wire.release()
+    return try prism.Value.array(prism.DType.uint8, [(i64)wire.value.length], wire.value)
 
 pub let max_refs: usize = 1024
 
@@ -499,12 +499,11 @@ func source_directory(session: prism.Session*, path: str, tree: const u8[], site
 ## a failure for one release is skipped, never fatal.
 pub func regenerate_site(database: db.Database*, site_root: str) -> !:
     let index_path = try paths.join(site_root, "index")
-    defer strings.release(index_path)
-    let index_z = try strings.copy(index_path)
-    defer strings.release(index_z)
-    if not files.exists((c.str)index_z): return
-    let listing = try files.read_limit((c.str)index_z, 4194304)
-    defer free(listing) in memory.heap
+    defer index_path.release()
+    if not files.exists((c.str)index_path.value): return
+    let index = try files.read((c.str)index_path.value, limit = 4194304)
+    defer index.release()
+    let listing = index.value
     var start: usize
     for end in 0..<listing.length:
         if listing[end] != '\n': continue
@@ -515,15 +514,13 @@ pub func regenerate_site(database: db.Database*, site_root: str) -> !:
         let (owner, name) = strings.split_once(coordinate, "/") else continue
         var relative: u8[300]
         let versions_path = try paths.join(site_root, try format(relative, f"{coordinate}/versions"))
-        defer strings.release(versions_path)
-        let versions_z = try strings.copy(versions_path)
-        defer strings.release(versions_z)
-        let versions = files.read_limit((c.str)versions_z, 4194304) catch: continue
-        defer free(versions) in memory.heap
+        defer versions_path.release()
+        let versions = files.read((c.str)versions_path.value, limit = 4194304) catch: continue
+        defer versions.release()
         var line_start: usize
-        for line_end in 0..<versions.length:
-            if versions[line_end] != '\n': continue
-            let entry = (str)versions[line_start..<line_end]
+        for line_end in 0..<versions.value.length:
+            if versions.value[line_end] != '\n': continue
+            let entry = (str)versions.value[line_start..<line_end]
             line_start = line_end + 1
             let (version, rest) = strings.split_once(entry, " ") else continue
             let (_, commit_text) = strings.split_once(rest, " ") else continue

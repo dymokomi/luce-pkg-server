@@ -103,10 +103,7 @@ func source_wire(document: prism.Document*, path: str, id: const u8[], source_ob
     if document.has_property(path, "wire"):
         let value = try document.get(path, "wire")
         defer value.release()
-        let bytes = value.value().bytes()
-        let copy = try alloc u8[bytes.length] in memory.heap
-        for i in 0..<bytes.length: copy[i] = bytes[i]
-        return copy
+        return try heap_copy(value.value().bytes())
     if document.has_property(path, "chunks"):
         let key_value = try document.get(path, "chunks")
         defer key_value.release()
@@ -130,7 +127,15 @@ func source_wire(document: prism.Document*, path: str, id: const u8[], source_ob
             at += bytes.length
             index += 1
         return wire
-    return try object_files.read(source_objects, id, max_object_bytes)
+    let file = try object_files.read(source_objects, id, max_object_bytes)
+    defer file.release()
+    return try heap_copy(file.value)
+
+## A copy of `bytes` in `memory.heap`, where `copy_object` frees it.
+func heap_copy(bytes: const u8[]) -> u8[]!:
+    let copy = try alloc u8[bytes.length] in memory.heap
+    for i in 0..<bytes.length: copy[i] = bytes[i]
+    return copy
 
 ## Write one object's file (verified against its id) and its listing.
 func copy_object(document: prism.Document*, path: str, target: prism.Session*, target_objects: str,
@@ -142,8 +147,8 @@ func copy_object(document: prism.Document*, path: str, target: prism.Session*, t
     if listed and try object_files.exists(target_objects, id):
         # Already migrated: re-verify the file against its id, nothing to write.
         let wire = try object_files.read(target_objects, id, max_object_bytes)
-        summary.object_bytes += (u64)wire.length
-        free(wire) in memory.heap
+        summary.object_bytes += (u64)wire.value.length
+        wire.release()
         return 0
     let wire = try source_wire(document, path, id, source_objects)
     defer free(wire) in memory.heap

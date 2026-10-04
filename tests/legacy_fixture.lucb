@@ -109,9 +109,9 @@ pub func main(arguments: c.str[]) -> i32!:
     try authority.value().bootstrap("testadmin", "fixture-password")
     try repositories.initialize(database.value())
     try repositories.create(database.value(), "testadmin", "legacy")
-    let bytes = try files.read_limit(arguments[2], 268435456)
-    defer free(bytes) in memory.heap
-    var pack = try git.decode_pack(bytes)
+    let bytes = try files.read(arguments[2], limit = 268435456)
+    defer bytes.release()
+    var pack = try git.decode_pack(bytes.value)
     defer pack.close()
     for item in pack.items:
         let wire = try alloc u8[item.payload.length + 32] in memory.heap

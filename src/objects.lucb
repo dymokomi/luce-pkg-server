@@ -11,8 +11,8 @@
 ## with other bytes for the same id is refused as an identity collision, never replaced.
 import c
 from luce_std import files
+import interop
 import io
-import memory
 import strings
 from luce_git import git
 from luce_prism import prism
@@ -91,11 +91,11 @@ func already_stored(path: str, wire: const u8[]) -> bool!:
     let name = try strings.copy(path)
     defer strings.release(name)
     if not files.exists((c.str)name): return false
-    let current = files.read_limit((c.str)name, wire.length) catch failure:
+    let current = files.read((c.str)name, limit = wire.length) catch failure:
         if failure.code == files.too_large: error(prism.conflict, "Git object identity collision")
         error(failure.code, failure.message)
-    defer free(current) in memory.heap
-    if not same(current, wire): error(prism.conflict, "Git object identity collision")
+    defer current.release()
+    if not same(current.value, wire): error(prism.conflict, "Git object identity collision")
     return true
 
 ## Store the envelope `wire` as object `id` below `root`. The caller has already hashed
@@ -120,18 +120,18 @@ pub func write(root: str, id: const u8[], wire: const u8[]) -> !:
         return
     try sync_directory(location.fan_out())
 
-## Read object `id` below `root` into a new heap allocation, verifying that its bytes
-## hash to `id`. A missing file is `prism.missing`; any other mismatch is invalid.
-pub func read(root: str, id: const u8[], limit: usize) -> u8[]!:
+## Read object `id` below `root`, verifying that its bytes hash to `id`; the caller
+## releases the result. A missing file is `prism.missing`; any other mismatch is invalid.
+pub func read(root: str, id: const u8[], limit: usize) -> interop.Owned[const u8[]]!:
     let location = try locate(root, id)
     let name = try strings.copy(location.path())
     defer strings.release(name)
-    let wire = files.read_limit((c.str)name, limit) catch failure:
+    let wire = files.read((c.str)name, limit = limit) catch failure:
         if failure.code == files.missing: error(prism.missing, "Git object file is missing")
         if failure.code == files.too_large: error(prism.invalid, "stored Git object exceeds limit")
         error(failure.code, failure.message)
-    errdefer free(wire) in memory.heap
-    let object = git.decode_object(wire) catch: error(prism.invalid, "stored Git object is malformed")
+    errdefer wire.release()
+    let object = git.decode_object(wire.value) catch: error(prism.invalid, "stored Git object is malformed")
     var digest: u8[20]
     discard(try git.hash_object(object.kind, object.payload, digest))
     if not same(digest, id): error(prism.invalid, "stored Git object identity mismatch")

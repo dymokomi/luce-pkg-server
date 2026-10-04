@@ -31,10 +31,10 @@ func roundtrip(database: db.Database*, payload: const u8[], write: bool) -> !:
     for i in 0..<n: assert(actual[i] == wire[i])
 
 func data_cases(database: db.Database*, bootstrap: c.str, write: bool) -> !:
-    let actual_source = try files.read_limit(bootstrap, 33554432)
-    defer free(actual_source) in memory.heap
-    assert(actual_source.length > 1048576)
-    try roundtrip(database, actual_source, write)
+    let actual_source = try files.read(bootstrap, limit = 33554432)
+    defer actual_source.release()
+    assert(actual_source.value.length > 1048576)
+    try roundtrip(database, actual_source.value, write)
     # Cross the IPC/journal 16 MiB frame limit, not merely the former1MiB cap.
     let payload = try alloc u8[17825792] in memory.heap
     defer free(payload) in memory.heap
