@@ -174,14 +174,20 @@ sudo /usr/local/sbin/luce-pkg-admin-run rebuild-site /var/lib/luce-pkg-server/re
 sudo install -d -o luce-pkg -g caddy -m 2750 /var/lib/luce-pkg-site.new/assets
 sudo install -o luce-pkg -g caddy -m 0640 /opt/luce-pkg-server/current/site-assets/* /var/lib/luce-pkg-site.new/assets/
 sudo mv /var/lib/luce-pkg-site /var/lib/luce-pkg-site.old && sudo mv /var/lib/luce-pkg-site.new /var/lib/luce-pkg-site
+sudo systemctl restart luce-pkg-server
 ```
+
+Restart right after the swap. The unit's `ReadWritePaths` binds the directory that
+existed when the service started, so until a restart every release write goes to the
+old directory, and once that is deleted, publishes fail with "the file could not be
+opened".
 
 `withdraw` deletes each version's tag; the newest release of a package always
 stays (remove the package to drop it). The objects stay, since the branch history
 still reaches them. A `luc.lock` that pinned a withdrawn version no longer
 resolves. `rebuild-site` writes into a new or empty directory and refuses one that
-already holds a site; a push during the rebuild lands in the old site, so pause
-pushes or rebuild again.
+already holds a site; a push between the rebuild and the restart lands in the old
+site, so pause pushes or rebuild again.
 Delete `/var/lib/luce-pkg-site.old` once the new site checks out.
 
 ## Abuse and bandwidth limits
