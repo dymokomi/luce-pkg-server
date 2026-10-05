@@ -416,13 +416,7 @@ func release_principal(who: interop.Reference[prism.Value]?):
 func busy() -> interop.Outcome[interop.Reference[http.Response]]:
     return reply("too many concurrent fetches; retry shortly", 503)
 
-# LUCE-BUG: luce-base 0.37 accepts `App.close` (a `const App*` method) where `func(App*)`
-# is wanted and the C backend casts the function pointer, which UBSan's function check
-# aborts on (Linux registry-sanitizers job); a disposer taking `App*` avoids the cast.
-func dispose_app(app: App*):
-    app.close()
-
-let app_type = interop.Type[App]("registry", dispose_app)
+let app_type = interop.Type[App]("registry", App.close)
 
 func store_token() -> str!:
     let token = os.env((c.str)"LUCE_REGISTRY_STORE_TOKEN") else error(auth.invalid, "LUCE_REGISTRY_STORE_TOKEN is required")
