@@ -19,13 +19,13 @@ pub struct Page:
     var bytes: u8[]
     pub var used: usize
 
-    pub mutating func put(text: str) -> !:
+    pub func put(text: str) -> !:
         if self.used + text.length > self.bytes.length: error(prism.invalid, "release: generated page is too large")
         for i in 0..<text.length: self.bytes[self.used + i] = text.bytes[i]
         self.used += text.length
 
     ## Text and attribute values from packages are always escaped.
-    pub mutating func escaped(text: str) -> !:
+    pub func escaped(text: str) -> !:
         var start: usize
         for i in 0..<text.length:
             let byte = text.bytes[i]
@@ -90,8 +90,8 @@ let kinds: str[3] = ["application", "tool", "package"]
 let kind_titles: str[3] = ["Applications", "Tools", "Packages"]
 let kind_pages: str[3] = ["applications", "tools", "packages"]
 let kind_notes: str[3] = ["Desktop programs you install and open: <code>luc install owner/name</code>",
-    "Command-line programs you install and run in a terminal: <code>luc install owner/name</code>",
-    "Libraries you build on in your own project: <code>luc add owner/name</code>"]
+                          "Command-line programs you install and run in a terminal: <code>luc install owner/name</code>",
+                          "Libraries you build on in your own project: <code>luc add owner/name</code>"]
 
 ## The kind recorded on an index line; a line from before kinds existed is a package.
 func kind_of(line: str) -> usize:
@@ -102,7 +102,7 @@ func kind_of(line: str) -> usize:
 
 func plural(out: Page*, count: usize, index: usize) -> !:
     var number: u8[32]
-    try out.put(try format(number, f"{count} "))
+    try out.put(try strings.format(number, f"{count} "))
     let singular: str[3] = ["application", "tool", "package"]
     try out.put(singular[index])
     if count != 1: try out.put("s")
@@ -250,7 +250,7 @@ func relative_path(value: str) -> bool:
 ## One release's notes, `<version>.notes` in the package's site directory.
 func release_notes(directory: str, version: str) -> interop.Owned[const u8[]]!:
     var name: u8[96]
-    let path = try paths.join(directory, try format(name, f"{version}.notes"))
+    let path = try paths.join(directory, try strings.format(name, f"{version}.notes"))
     defer path.release()
     return try files.read((c.str)path.value, limit = max_notes)
 
@@ -259,7 +259,7 @@ func release_notes(directory: str, version: str) -> interop.Owned[const u8[]]!:
 ## `directory` is the package's site directory, where each release's notes live.
 pub func package_page(out: Page*, definition: pkg.Definition*, versions: const u8[], readme: str, directory: str) -> !:
     var title: u8[160]
-    let coordinate = try format(title, f"{definition.owner}/{definition.name}")
+    let coordinate = try strings.format(title, f"{definition.owner}/{definition.name}")
     try head(out, coordinate, definition.description, "/")
     try out.put("<div class=\"side\">\n<details class=\"nav\" open>\n<summary>Pages</summary>\n<ul>\n<li><a href=\"/\">Packages</a></li>\n</ul>\n</details>\n<details class=\"nav\" open>\n<summary>On this page</summary>\n<ul>\n<li class=\"h2\"><a href=\"#install\">Install</a></li>")
     if readme.length > 0: try out.put("<li class=\"h2\"><a href=\"#readme\">Documentation</a></li>")
@@ -357,7 +357,7 @@ pub func addressable(name: str) -> bool:
 
 func source_head(out: Page*, coordinate: str, version: str, location: str) -> !:
     var title: u8[512]
-    try head(out, try format(title, f"{coordinate} {version}"), "Source code", "/")
+    try head(out, try strings.format(title, f"{coordinate} {version}"), "Source code", "/")
     try out.put("<div class=\"side\">\n<details class=\"nav\" open>\n<summary>Pages</summary>\n<ul>\n<li><a href=\"/\">Packages</a></li>\n<li><a href=\"/")
     try out.escaped(coordinate)
     try out.put("/\">")
@@ -419,7 +419,7 @@ pub func tree_page(out: Page*, coordinate: str, version: str, location: str, ent
             try out.put("</td><td>")
             if not entry.directory:
                 var size: u8[32]
-                try out.put(try format(size, f"{entry.size}"))
+                try out.put(try strings.format(size, f"{entry.size}"))
             try out.put("</td></tr>\n")
     try out.put("</tbody></table></div>\n")
     try foot(out)
@@ -541,7 +541,7 @@ pub func blob_page(out: Page*, coordinate: str, version: str, location: str, con
     if not renderable(content):
         var size: u8[64]
         try out.put("<p>")
-        try out.put(try format(size, f"{content.length}"))
+        try out.put(try strings.format(size, f"{content.length}"))
         try out.put(" bytes; binary or too large to show. It is in the release pack.</p>\n")
         try foot(out)
         return
@@ -553,7 +553,7 @@ pub func blob_page(out: Page*, coordinate: str, version: str, location: str, con
         if end != content.length and content[end] != '\n': continue
         if end == content.length and start == end: break
         var label: u8[48]
-        try out.put(try format(label, f"<span class=\"l\" id=\"L{number}\">"))
+        try out.put(try strings.format(label, f"<span class=\"l\" id=\"L{number}\">"))
         try highlight(out, (str)content[start..<end], syntax)
         try out.put("</span>\n")
         number += 1

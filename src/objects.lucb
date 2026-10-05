@@ -73,10 +73,10 @@ struct Location:
 func locate(root: str, id: const u8[]) -> Location!:
     if id.length != 20: error(prism.invalid, "invalid Git object id")
     var encoded: u8[40]
-    discard(try git.hex_id(id, encoded))
+    _ = try git.hex_id(id, encoded)
     var result: Location
-    result.directory_length = (try format(result.directory, f"{root}/{(str)encoded[..<2]}")).length
-    result.file_length = (try format(result.file, f"{root}/{(str)encoded[..<2]}/{(str)encoded[2..]}")).length
+    result.directory_length = (try strings.format(result.directory, f"{root}/{(str)encoded[..<2]}")).length
+    result.file_length = (try strings.format(result.file, f"{root}/{(str)encoded[..<2]}/{(str)encoded[2..]}")).length
     return result
 
 func same(left: const u8[], right: const u8[]) -> bool:
@@ -116,7 +116,7 @@ pub func write(root: str, id: const u8[], wire: const u8[]) -> !:
         # A concurrent push of the same object published first; it must be identical.
         if failure.code != files.already_exists: error(failure.code, failure.message)
         temporary.destroy()
-        discard(try already_stored(location.path(), wire))
+        _ = try already_stored(location.path(), wire)
         return
     try sync_directory(location.fan_out())
 
@@ -133,7 +133,7 @@ pub func read(root: str, id: const u8[], limit: usize) -> interop.Owned[const u8
     errdefer wire.release()
     let object = git.decode_object(wire.value) catch: error(prism.invalid, "stored Git object is malformed")
     var digest: u8[20]
-    discard(try git.hash_object(object.kind, object.payload, digest))
+    _ = try git.hash_object(object.kind, object.payload, digest)
     if not same(digest, id): error(prism.invalid, "stored Git object identity mismatch")
     return wire
 

@@ -1,7 +1,7 @@
 #prisma 4.0
 def package "luce-pkg-server" {
     str owner = "dymokomi"
-    str version = "0.3.6"
+    str version = "0.4.0"
     str kind = "package"
     str language = "luce-base"
     str description = "The registry behind pkg.luciaos.com: a Git host and package index for Luce and Luce Base."
@@ -10,61 +10,61 @@ def package "luce-pkg-server" {
 
     def dependency "luce-server" {
         str owner = "dymokomi"
-        str version = "^0.2.2"
+        str version = "^0.3.0"
         str path = "../luce-server"
     }
 
     def dependency "luce-db" {
         str owner = "dymokomi"
-        str version = "^0.2.0"
+        str version = "^0.3.0"
         str path = "../luce-db"
     }
 
     def dependency "luce-auth" {
         str owner = "dymokomi"
-        str version = "^0.3.0"
+        str version = "^0.4.0"
         str path = "../luce-auth"
     }
 
     def dependency "luce-json" {
         str owner = "dymokomi"
-        str version = "^0.3.2"
+        str version = "^0.4.0"
         str path = "../luce-json"
     }
 
     def dependency "luce-prism" {
         str owner = "dymokomi"
-        str version = "^0.2.4"
+        str version = "^0.3.0"
         str path = "../luce-prism"
     }
 
     def dependency "luce-git" {
         str owner = "dymokomi"
-        str version = "^0.2.4"
+        str version = "^0.3.0"
         str path = "../luce-git"
     }
 
     def dependency "luce-crypto" {
         str owner = "dymokomi"
-        str version = "^0.2.2"
+        str version = "^0.3.0"
         str path = "../luce-crypto"
     }
 
     def dependency "luce-pkg" {
         str owner = "dymokomi"
-        str version = "^0.3.2"
+        str version = "^0.4.0"
         str path = "../luce-pkg"
     }
 
     def dependency "luce-compress" {
         str owner = "dymokomi"
-        str version = "^0.4.2"
+        str version = "^0.5.0"
         str path = "../luce-compress"
     }
 
     def dependency "luce-std" {
         str owner = "dymokomi"
-        str version = "^0.3.2"
+        str version = "^0.4.0"
         str path = "../luce-std"
     }
 }

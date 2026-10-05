@@ -4,6 +4,7 @@ from luce_auth import auth
 from luce_prism import prism
 from luce_git import git
 import thread
+import strings
 
 var zero: u8[20]
 var first_id: u8[20]
@@ -15,9 +16,9 @@ let first_commit = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor Fixtu
 let second_commit = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor Fixture <test@example.test> 2 +0000\ncommitter Fixture <test@example.test> 2 +0000\n\nsecond\n"
 
 func identify() -> !:
-    discard(try git.hash_object("commit", first_commit, first_id))
-    discard(try git.hash_object("commit", second_commit, second_id))
-    discard(try git.hash_blob(b"fixture blob", blob_id))
+    _ = try git.hash_object("commit", first_commit, first_id)
+    _ = try git.hash_object("commit", second_commit, second_id)
+    _ = try git.hash_blob(b"fixture blob", blob_id)
 
 func seed(database: db.Database*, name: str) -> !:
     try repositories.create(database, "alice", name)
@@ -34,7 +35,7 @@ func seed(database: db.Database*, name: str) -> !:
     # Ensure the ref directory already exists; prefix race must conflict on the
     # serialization guard, not incidentally on creation of the shared directory.
     try repositories.update_refs(database, "alice", "alice", name,
-        [repositories.RefUpdate(name = "refs/tags/seed", expected = zero, target = blob_id)])
+                                 [repositories.RefUpdate(name = "refs/tags/seed", expected = zero, target = blob_id)])
 
 func change(name: str, expected: const u8[], target: const u8[]) -> repositories.RefUpdate:
     return repositories.RefUpdate(name = name, expected = expected, target = target)
@@ -129,7 +130,7 @@ func limits(database: db.Database*) -> !:
         let remaining = repositories.max_refs - made
         let count = repositories.max_ref_updates if remaining > repositories.max_ref_updates else remaining
         for i in 0..<count:
-            let label = try format(names[i], f"refs/tags/t{made + i}")
+            let label = try strings.format(names[i], f"refs/tags/t{made + i}")
             updates[i] = change(label, zero, blob_id)
         try repositories.update_refs(database, "alice", "alice", "demo", updates[..<count])
         made += count
@@ -165,26 +166,26 @@ func attempt(first: bool) -> !:
         updates[1] = change("refs/heads/left" if first else "refs/heads/right", zero, first_id)
         count = 2
     repositories.update_refs(database.value(), "alice", "alice", repo, updates[..<count]) catch failure:
-        if failure.code == prism.conflict: discard(conflicts.add(1, .relaxed))
+        if failure.code == prism.conflict: _ = conflicts.add(1, .relaxed)
         else:
             print(failure.message)
-            discard(unexpected.add(1, .relaxed))
+            _ = unexpected.add(1, .relaxed)
         return
-    discard(wins.add(1, .relaxed))
+    _ = wins.add(1, .relaxed)
 
 func worker_one(raw: void*?):
-    discard(raw)
-    discard(ready.add(1, .release))
+    _ = raw
+    _ = ready.add(1, .release)
     attempt(true) catch failure:
         print(failure.message)
-        discard(unexpected.add(1, .relaxed))
+        _ = unexpected.add(1, .relaxed)
 
 func worker_two(raw: void*?):
-    discard(raw)
-    discard(ready.add(1, .release))
+    _ = raw
+    _ = ready.add(1, .release)
     attempt(false) catch failure:
         print(failure.message)
-        discard(unexpected.add(1, .relaxed))
+        _ = unexpected.add(1, .relaxed)
 
 func has_ref(database: db.Database*, repo: str, name: str) -> bool!:
     let value = repositories.get_ref(database, "alice", "alice", repo, name) catch failure:

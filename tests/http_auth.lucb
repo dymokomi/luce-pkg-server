@@ -9,7 +9,7 @@ func rejected(header: str):
         failed = true
         recover none
     if let value = result:
-        discard(value)
+        _ = value
         assert(false)
     assert(failed)
 
@@ -21,12 +21,12 @@ func rejected_small(header: str, size: usize):
         failed = true
         recover none
     if let value = result:
-        discard(value)
+        _ = value
         assert(false)
     assert(failed)
 
 pub func main(arguments: str[]) -> i32!:
-    discard(arguments)
+    _ = arguments
     var output: u8[128]
     let first = try http_auth.decode_basic("Basic YWxpY2U6ZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZmZg==", output)
     assert(first.username == "alice")

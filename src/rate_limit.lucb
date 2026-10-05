@@ -13,7 +13,7 @@ pub struct Gate:
 
     ## Explicit time keeps the state machine deterministic in tests. A missing or
     ## backward wall clock fails closed until the previous window catches up.
-    pub mutating func admit(now: i64) -> bool:
+    pub func admit(now: i64) -> bool:
         self.mutex.lock()
         defer self.mutex.unlock()
         if now <= 0: return false

@@ -39,27 +39,27 @@ struct Batch:
     var elements: usize
     var bytes: usize
 
-    mutating func open() -> prism.Session*!:
+    func open() -> prism.Session*!:
         if let current = self.session: return current.value()
         let started = try self.database.begin()
         self.session = started
         return started.value()
 
     ## Count one element of `bytes`; commit once the batch is full.
-    mutating func counted(bytes: usize) -> !:
+    func counted(bytes: usize) -> !:
         self.elements += 1
         self.bytes += bytes
         if self.elements >= batch_elements or self.bytes >= batch_bytes: try self.commit()
 
-    mutating func commit() -> !:
+    func commit() -> !:
         if let current = self.session:
-            discard(try current.value().commit(wait_ms = 60000))
+            _ = try current.value().commit(wait_ms = 60000)
             current.release()
         self.session = none
         self.elements = 0
         self.bytes = 0
 
-    mutating func close():
+    func close():
         if let current = self.session: current.release()
         self.session = none
 
@@ -112,14 +112,14 @@ func source_wire(document: prism.Document*, path: str, id: const u8[], source_ob
         let size = try size_value.value().integer_at()
         if size <= 0 or size > (i64)max_object_bytes: error(prism.invalid, "invalid chunked object size")
         var group_buffer: u8[320]
-        let group = try format(group_buffer, f"{prefix(path, 3)}/chunks/{try key_value.value().text_at()}")
-        let wire = try alloc u8[(usize)size] in memory.heap
+        let group = try strings.format(group_buffer, f"{prefix(path, 3)}/chunks/{try key_value.value().text_at()}")
+        let wire = try new u8[(usize)size] --- in memory.heap
         errdefer free(wire) in memory.heap
         var at: usize = 0
         var index: usize = 0
         while at < wire.length:
             var label_buffer: u8[16]
-            let chunk = try document.get(group, try format(label_buffer, f"c{index}"))
+            let chunk = try document.get(group, try strings.format(label_buffer, f"c{index}"))
             defer chunk.release()
             let bytes = chunk.value().bytes()
             if bytes.length == 0 or bytes.length > wire.length - at: error(prism.invalid, "invalid stored chunk length")
@@ -133,13 +133,13 @@ func source_wire(document: prism.Document*, path: str, id: const u8[], source_ob
 
 ## A copy of `bytes` in `memory.heap`, where `copy_object` frees it.
 func heap_copy(bytes: const u8[]) -> u8[]!:
-    let copy = try alloc u8[bytes.length] in memory.heap
+    let copy = try new u8[bytes.length] --- in memory.heap
     for i in 0..<bytes.length: copy[i] = bytes[i]
     return copy
 
 ## Write one object's file (verified against its id) and its listing.
 func copy_object(document: prism.Document*, path: str, target: prism.Session*, target_objects: str,
-        source_objects: str, summary: Summary*) -> usize!:
+                 source_objects: str, summary: Summary*) -> usize!:
     var id: u8[20]
     try git.decode_id(component(path, 4), id)
     summary.objects += 1
@@ -154,7 +154,7 @@ func copy_object(document: prism.Document*, path: str, target: prism.Session*, t
     defer free(wire) in memory.heap
     let object = try git.decode_object(wire)
     var digest: u8[20]
-    discard(try git.hash_object(object.kind, object.payload, digest))
+    _ = try git.hash_object(object.kind, object.payload, digest)
     for i in 0..<(usize)20:
         if digest[i] != id[i]: error(prism.invalid, "a stored Git object does not hash to its id")
     try object_files.write(target_objects, id, wire)
@@ -234,5 +234,5 @@ pub func migrate(source: db.Database*, source_objects: str, target: db.Database*
                 summary.removed += 1
                 try batch.counted(path.length + 32)
     try batch.commit()
-    discard(try target.bake(wait_ms = 60000))
+    _ = try target.bake(wait_ms = 60000)
     return summary

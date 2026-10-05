@@ -9,16 +9,16 @@ struct Shared:
 
 func contender(raw: void*?):
     let shared = (Shared*)(raw else trap("missing limiter state"))
-    discard(shared.ready.add(1, .release))
+    _ = shared.ready.add(1, .release)
     while shared.start.load(.acquire) == 0: thread.sleep(1)
-    if shared.gate.admit(1000): discard(shared.accepted.add(1, .relaxed))
+    if shared.gate.admit(1000): _ = shared.accepted.add(1, .relaxed)
 
 pub func main(arguments: str[]) -> i32!:
     assert(arguments.length == 1)
     var gate = rate_limit.Gate()
     assert(not gate.admit(0))
     for i in 0..<rate_limit.capacity:
-        discard(i)
+        _ = i
         assert(gate.admit(100))
     assert(not gate.admit(100))
     assert(not gate.admit(159))
@@ -28,7 +28,7 @@ pub func main(arguments: str[]) -> i32!:
     # Exercise the actual module-global gates as used by registry handlers;
     # local Gate coverage alone cannot detect backend-specific global state.
     for i in 0..<rate_limit.capacity:
-        discard(i)
+        _ = i
         assert(rate_limit.admit_registration(200))
         assert(rate_limit.admit_login(200))
     assert(not rate_limit.admit_registration(200))

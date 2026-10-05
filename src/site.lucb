@@ -42,7 +42,7 @@ func package_directory(site: str, owner: str, name: str) -> interop.Owned[str]!:
 
 func member(directory: str, version: str, suffix: str) -> interop.Owned[str]!:
     var buffer: u8[96]
-    return try paths.join(directory, try format(buffer, f"{version}{suffix}"))
+    return try paths.join(directory, try strings.format(buffer, f"{version}{suffix}"))
 
 ## Step one, before the tag ref is committed: the immutable release files.
 pub func publish_files(site: str, owner: str, name: str, version: str, pack: const u8[], definition: const u8[], notes: const u8[]) -> !:
@@ -77,7 +77,7 @@ func refresh_index(site: str) -> !:
     defer index.release()
     let current = index.value
     if current.length == 0: return
-    let buffer = try alloc u8[max_listing] in memory.heap
+    let buffer = try new u8[max_listing] --- in memory.heap
     defer free(buffer) in memory.heap
     var listing = Text(bytes = buffer)
     var start: usize
@@ -88,7 +88,7 @@ func refresh_index(site: str) -> !:
         let (coordinate, rest) = strings.split_once(line, "\t") else continue
         let (latest, _) = strings.split_once(rest, "\t") else continue
         var relative: u8[400]
-        let definition_path = try paths.join(site, try format(relative, f"{coordinate}/{latest}.prisma"))
+        let definition_path = try paths.join(site, try strings.format(relative, f"{coordinate}/{latest}.prisma"))
         defer definition_path.release()
         let bytes = try read_listing((c.str)definition_path.value)
         defer bytes.release()
@@ -118,7 +118,7 @@ pub func ensure_front_page(site: str) -> !:
     defer index_path.release()
     let listing = try read_listing((c.str)index_path.value)
     defer listing.release()
-    let html = try alloc u8[pages.max_page] in memory.heap
+    let html = try new u8[pages.max_page] --- in memory.heap
     defer free(html) in memory.heap
     var front = pages.page(html)
     try pages.index_page(&front, listing.value)
@@ -167,19 +167,19 @@ struct Text:
     var bytes: u8[]
     var used: usize
 
-    mutating func put(text: str) -> !:
+    func put(text: str) -> !:
         if self.used + text.length > self.bytes.length: error(prism.invalid, "registry listing exceeds its bound")
         for i in 0..<text.length: self.bytes[self.used + i] = text.bytes[i]
         self.used += text.length
 
 ## Step two, after the tag ref is committed: make the release discoverable.
 pub func publish_listing(site: str, owner: str, name: str, version: str, pack: const u8[], commit: str,
-        definition: const u8[], readme: const u8[]) -> !:
+                         definition: const u8[], readme: const u8[]) -> !:
     var declared = try pkg.decode_package(definition)
     defer declared.close()
     let description = declared.description
     var digest: u8[32]
-    discard(try pkg.source_digest(pack, digest))
+    _ = try pkg.source_digest(pack, digest)
     var digest_text: u8[64]
     let digits = "0123456789abcdef"
     for i in 0..<(usize)32:
@@ -193,7 +193,7 @@ pub func publish_listing(site: str, owner: str, name: str, version: str, pack: c
     let versions = try read_listing((c.str)versions_path.value)
     defer versions.release()
     let current = versions.value
-    let buffer = try alloc u8[max_listing] in memory.heap
+    let buffer = try new u8[max_listing] --- in memory.heap
     defer free(buffer) in memory.heap
     var output = Text(bytes = buffer)
     var latest = try pkg.parse_version(version)
@@ -227,7 +227,7 @@ pub func publish_listing(site: str, owner: str, name: str, version: str, pack: c
         try files.write_atomic((c.str)versions_path.value, buffer[..<output.used], synchronize = true)
 
     var coordinate_buffer: u8[160]
-    let coordinate = try format(coordinate_buffer, f"{owner}/{name}")
+    let coordinate = try strings.format(coordinate_buffer, f"{owner}/{name}")
     let index_path = try paths.join(site, "index")
     defer index_path.release()
     let index = try read_listing((c.str)index_path.value)
@@ -253,7 +253,7 @@ pub func publish_listing(site: str, owner: str, name: str, version: str, pack: c
 
     # Pages. The package page describes the latest release, so an older patch release
     # pushed later refreshes only the versions it lists.
-    let html = try alloc u8[pages.max_page] in memory.heap
+    let html = try new u8[pages.max_page] --- in memory.heap
     defer free(html) in memory.heap
     var front = pages.page(html)
     try pages.index_page(&front, buffer[..<listing.used])
@@ -276,10 +276,10 @@ pub func write_package_page(site: str, owner: str, name: str, definition: const 
     defer directory.release()
     let versions_path = try paths.join(directory.value, "versions")
     defer versions_path.release()
-    let html = try alloc u8[pages.max_page] in memory.heap
+    let html = try new u8[pages.max_page] --- in memory.heap
     defer free(html) in memory.heap
     if true:
-        let fragment = try alloc u8[pages.max_page] in memory.heap
+        let fragment = try new u8[pages.max_page] --- in memory.heap
         defer free(fragment) in memory.heap
         var rendered_size: usize = 0
         if readme.length > 0:
@@ -309,7 +309,7 @@ pub func dependents(site: str, owner: str, name: str, output: u8[]) -> usize!:
         let (coordinate, rest) = strings.split_once(line, "\t") else continue
         let (latest, _) = strings.split_once(rest, "\t") else continue
         var relative: u8[400]
-        let definition_path = try paths.join(site, try format(relative, f"{coordinate}/{latest}.prisma"))
+        let definition_path = try paths.join(site, try strings.format(relative, f"{coordinate}/{latest}.prisma"))
         defer definition_path.release()
         let bytes = try read_listing((c.str)definition_path.value)
         defer bytes.release()
@@ -337,12 +337,12 @@ pub struct SiteRemoval:
 pub func remove_package(site: str, owner: str, name: str) -> SiteRemoval!:
     var result: SiteRemoval
     var coordinate_buffer: u8[160]
-    let coordinate = try format(coordinate_buffer, f"{owner}/{name}")
+    let coordinate = try strings.format(coordinate_buffer, f"{owner}/{name}")
     let index_path = try paths.join(site, "index")
     defer index_path.release()
     let index = try read_listing((c.str)index_path.value)
     defer index.release()
-    let buffer = try alloc u8[max_listing] in memory.heap
+    let buffer = try new u8[max_listing] --- in memory.heap
     defer free(buffer) in memory.heap
     var listing = Text(bytes = buffer)
     var start: usize

@@ -41,10 +41,10 @@ func committed(database: db.Database*, bytes: usize) -> !:
     let total = unbaked.add((u64)bytes, .relaxed) + (u64)bytes
     if total < bake_threshold: return
     if unbaked.swap(0, .acq_rel) < bake_threshold: return
-    discard(database.bake(wait_ms = commit_wait_ms) catch failure:
+    _ = database.bake(wait_ms = commit_wait_ms) catch failure:
         if failure.code == prism.busy or failure.code == prism.timed_out:
             recover -1
-        error(failure.code, failure.message))
+        error(failure.code, failure.message)
 
 ## Attempts at a transaction whose commit met a concurrent write. The transaction is
 ## rebuilt from a fresh snapshot each time, so every check it makes is repeated.
@@ -52,9 +52,9 @@ let commit_attempts: usize = 8
 
 ## Commit `tx`, answering false when a concurrent commit overlapped its writes.
 func commit_unless_raced(tx: prism.Session*) -> bool!:
-    discard(tx.commit(wait_ms = commit_wait_ms) catch failure:
+    _ = tx.commit(wait_ms = commit_wait_ms) catch failure:
         if failure.code == prism.conflict: return false
-        error(failure.code, failure.message))
+        error(failure.code, failure.message)
     return true
 
 pub enum PullRequestState as u8:
@@ -147,8 +147,8 @@ pub func initialize(database: db.Database*) -> !:
     defer tx.release()
     if try tx.value().contains("/repositories"): return
     try tx.value().add("/repositories", "directory")
-    discard(try tx.value().commit(wait_ms = 1000))
-    discard(try database.bake(wait_ms = 1000))
+    _ = try tx.value().commit(wait_ms = 1000)
+    _ = try database.bake(wait_ms = 1000)
 
 ## Creates a private repository for an existing account. Duplicate creation is a
 ## conflict, never replacement. A concurrency conflict must be retried by caller.
@@ -175,12 +175,12 @@ pub func create(database: db.Database*, principal: str, name: str) -> !:
     let label = try prism.Value.text(name)
     defer label.release()
     try tx.value().set(path, "name", label)
-    discard(try tx.value().commit(wait_ms = commit_wait_ms))
+    _ = try tx.value().commit(wait_ms = commit_wait_ms)
     try committed(database, path.length * 3 + 256)
 
 func object_path(path: str, id: const u8[], output: u8[]) -> str!:
     var encoded_id: u8[40]
-    discard(try git.hex_id(id, encoded_id))
+    _ = try git.hex_id(id, encoded_id)
     return try join([path, "/objects/", (str)encoded_id], output)
 
 ## What a push stores for one object: its id, kind and envelope size. The bytes are
@@ -243,7 +243,7 @@ pub func put_object(database: db.Database*, principal: str, owner: str, name: st
         error(prism.invalid, "invalid repository object size or id output")
     let object = try git.decode_object(wire)
     var digest: u8[20]
-    discard(try git.hash_object(object.kind, object.payload, digest))
+    _ = try git.hash_object(object.kind, object.payload, digest)
     # Only the owner of an existing repository may add files to the object store.
     let snapshot = try database.snapshot()
     defer snapshot.release()
@@ -298,7 +298,7 @@ func release_version(ref_name: str) -> str:
     let prefix = "refs/tags/v"
     if not strings.starts_with(ref_name, prefix): return ""
     let version = (str)ref_name.bytes[prefix.length..]
-    discard(pkg.parse_version(version) catch: return "")
+    _ = pkg.parse_version(version) catch: return ""
     return version
 
 pub let max_release_pack: usize = 67108864
@@ -355,7 +355,7 @@ func tree_file(session: prism.Session*, path: str, tree: const u8[], file: str, 
     return blob.payload.length
 
 func tag_release(database: db.Database*, owner: str, name: str, target: const u8[], version: str,
-        pack: u8[], definition: u8[], readme: u8[], notes: u8[]) -> TagRelease!:
+                 pack: u8[], definition: u8[], readme: u8[], notes: u8[]) -> TagRelease!:
     var path_buffer: u8[192]
     let path = try repo_path(owner, owner, name, path_buffer)
     let snapshot = try database.snapshot()
@@ -385,7 +385,7 @@ func tag_release(database: db.Database*, owner: str, name: str, target: const u8
 
     var commit_id: u8[20]
     var budget: usize = 1048576
-    discard(try peel(session, path, target, commit_id, &budget))
+    _ = try peel(session, path, target, commit_id, &budget)
     let commit_value = try checked_object(session, path, commit_id)
     defer commit_value.release()
     let commit_object = try git.decode_object(commit_value.value().bytes())
@@ -394,7 +394,7 @@ func tag_release(database: db.Database*, owner: str, name: str, target: const u8
     var tree_id: u8[20]
     try git.decode_id(commit.tree, tree_id)
 
-    discard(try git.hex_id(commit_id, result.commit))
+    _ = try git.hex_id(commit_id, result.commit)
     for i in 0..<(usize)20: result.tree[i] = tree_id[i]
     let root_value = try checked_object(session, path, tree_id)
     defer root_value.release()
@@ -420,17 +420,17 @@ func tag_release(database: db.Database*, owner: str, name: str, target: const u8
     if declared.version != version: error(prism.invalid, "release: package.prisma version must match the release tag")
     if declared.readme.length > 0: result.readme_size = try tree_file(session, path, tree_id, declared.readme, readme)
 
-    let nodes = try alloc GraphNode[max_graph_objects] in memory.heap
+    let nodes = try new GraphNode[max_graph_objects] --- in memory.heap
     defer free(nodes) in memory.heap
-    let slots = try alloc usize[graph_slots] in memory.heap
+    let slots = try new usize[graph_slots] --- in memory.heap
     defer free(slots) in memory.heap
     for i in 0..<slots.length: slots[i] = 0
     var graph = Graph(nodes = nodes, slots = slots)
     try graph.add(tree_id, 2)
     try graph.validate(session, path)
-    let objects = try alloc git.Object[max_graph_objects + 1] in memory.heap
+    let objects = try new git.Object[max_graph_objects + 1] --- in memory.heap
     defer free(objects) in memory.heap
-    let leases = try alloc FetchLease[max_graph_objects] in memory.heap
+    let leases = try new FetchLease[max_graph_objects] --- in memory.heap
     defer free(leases) in memory.heap
     var count: usize = 0
     defer release_fetch_leases(leases, &count)
@@ -449,13 +449,13 @@ func tag_release(database: db.Database*, owner: str, name: str, target: const u8
 
 ## Write the browsable source of one release: a page per directory and per file.
 func source_directory(session: prism.Session*, path: str, tree: const u8[], site_root: str, owner: str, name: str,
-        coordinate: str, version: str, location: str, html: u8[], depth: usize, budget: usize*) -> !:
+                      coordinate: str, version: str, location: str, html: u8[], depth: usize, budget: usize*) -> !:
     if depth > 24: return
     let value = try checked_object(session, path, tree)
     defer value.release()
     let object = try git.decode_object(value.value().bytes())
     if object.kind != "tree": return
-    let listed = try alloc pages.Listed[1024] in memory.heap
+    let listed = try new pages.Listed[1024] --- in memory.heap
     defer free(listed) in memory.heap
     var count: usize
     var at: usize = 0
@@ -469,7 +469,7 @@ func source_directory(session: prism.Session*, path: str, tree: const u8[], site
         if *budget == 0: break
         *budget -= 1
         var relative: u8[1024]
-        let inner = try format(relative, f"{location}/{entry.name}") if location.length > 0 else try format(relative, f"{entry.name}")
+        let inner = try strings.format(relative, f"{location}/{entry.name}") if location.length > 0 else try strings.format(relative, f"{entry.name}")
         if directory:
             if linked: try source_directory(session, path, entry.id, site_root, owner, name, coordinate, version, inner, html, depth + 1, budget)
         else:
@@ -480,18 +480,18 @@ func source_directory(session: prism.Session*, path: str, tree: const u8[], site
             # Images are also kept as raw files, so a README can show them.
             if linked and pages.image_name(entry.name) and size <= 4194304:
                 var raw_target: u8[1200]
-                try site.write_nested(site_root, owner, name, try format(raw_target, f"{version}/raw/{inner}"), blob.payload)
+                try site.write_nested(site_root, owner, name, try strings.format(raw_target, f"{version}/raw/{inner}"), blob.payload)
             if linked:
                 var page = pages.page(html)
                 try pages.blob_page(&page, coordinate, version, inner, blob.payload)
                 var target: u8[1200]
-                try site.write_nested(site_root, owner, name, try format(target, f"{version}/blob/{inner}.html"), html[..<page.used])
+                try site.write_nested(site_root, owner, name, try strings.format(target, f"{version}/blob/{inner}.html"), html[..<page.used])
         listed[count] = pages.Listed(name = entry.name, directory = directory, size = size, linked = linked)
         count += 1
     var page = pages.page(html)
     try pages.tree_page(&page, coordinate, version, location, listed[..<count])
     var target: u8[1200]
-    let index = try format(target, f"{version}/tree/{location}/index.html") if location.length > 0 else try format(target, f"{version}/tree/index.html")
+    let index = try strings.format(target, f"{version}/tree/{location}/index.html") if location.length > 0 else try strings.format(target, f"{version}/tree/index.html")
     try site.write_nested(site_root, owner, name, index, html[..<page.used])
 
 ## Regenerate every release's package page and source pages from repository state, so a
@@ -513,7 +513,7 @@ pub func regenerate_site(database: db.Database*, site_root: str) -> !:
         let (latest, _) = strings.split_once(after, "\t") else continue
         let (owner, name) = strings.split_once(coordinate, "/") else continue
         var relative: u8[300]
-        let versions_path = try paths.join(site_root, try format(relative, f"{coordinate}/versions"))
+        let versions_path = try paths.join(site_root, try strings.format(relative, f"{coordinate}/versions"))
         defer versions_path.release()
         let versions = files.read((c.str)versions_path.value, limit = 4194304) catch: continue
         defer versions.release()
@@ -546,7 +546,7 @@ func regenerate_release(database: db.Database*, site_root: str, owner: str, name
         if definition_size > 0:
             var declared = try pkg.decode_package(definition[..<definition_size])
             defer declared.close()
-            let readme = try alloc u8[pages.max_readme] in memory.heap
+            let readme = try new u8[pages.max_readme] --- in memory.heap
             defer free(readme) in memory.heap
             var readme_size: usize = 0
             if declared.readme.length > 0: readme_size = try tree_file(snapshot.value(), path, tree, declared.readme, readme)
@@ -558,10 +558,10 @@ func publish_source(database: db.Database*, site_root: str, owner: str, name: st
     let path = try repo_path(owner, owner, name, path_buffer)
     let snapshot = try database.snapshot()
     defer snapshot.release()
-    let html = try alloc u8[pages.max_page] in memory.heap
+    let html = try new u8[pages.max_page] --- in memory.heap
     defer free(html) in memory.heap
     var title: u8[160]
-    let coordinate = try format(title, f"{owner}/{name}")
+    let coordinate = try strings.format(title, f"{owner}/{name}")
     var budget = max_graph_objects
     try source_directory(snapshot.value(), path, tree, site_root, owner, name, coordinate, version, "", html, 0, &budget)
 
@@ -579,7 +579,7 @@ struct PackBases:
     var path: str
     var value: interop.Reference[prism.Value]?
 
-    mutating func close():
+    func close():
         if let value = self.value: value.release()
         self.value = none
 
@@ -624,21 +624,21 @@ pub func receive_pack(database: db.Database*, principal: str, owner: str, name: 
         snapshot.value().close()
         # Validate every packed object's structure, even if no requested ref uses it.
         for item in pack.items:
-            if item.kind == "tree": discard(try git.validate_tree(item.payload))
-            elif item.kind == "commit": discard(try git.decode_commit(item.payload))
-            elif item.kind == "tag": discard(try git.decode_tag(item.payload))
+            if item.kind == "tree": _ = try git.validate_tree(item.payload)
+            elif item.kind == "commit": _ = try git.decode_commit(item.payload)
+            elif item.kind == "tag": _ = try git.decode_tag(item.payload)
         # Every object's file is durable before the repository lists any of them.
-        let listings = try alloc Listing[pack.items.length] in memory.heap
+        let listings = try new Listing[pack.items.length] --- in memory.heap
         defer free(listings) in memory.heap
         let root = try object_files.configured_root()
         for i in 0..<pack.items.length:
             let item = pack.items[i]
-            let wire = try alloc u8[item.payload.length + 32] in memory.heap
+            let wire = try new u8[item.payload.length + 32] --- in memory.heap
             defer free(wire) in memory.heap
             let count = try git.encode_object(item.kind, item.payload, wire)
             if count > max_object_bytes: error(prism.invalid, "pushed Git object exceeds limit")
             var actual: u8[20]
-            discard(try git.hash_object(item.kind, item.payload, actual))
+            _ = try git.hash_object(item.kind, item.payload, actual)
             if not same(actual, item.id): error(prism.invalid, "stored push object identity mismatch")
             try object_files.write(root, actual, wire[..<count])
             listings[i] = Listing(kind = item.kind, size = count)
@@ -657,10 +657,10 @@ pub func receive_pack(database: db.Database*, principal: str, owner: str, name: 
     if releases == 0:
         try update_refs(database, principal, owner, name, updates[..<request.count])
         return request.count
-    let pack = try alloc u8[max_release_pack] in memory.heap
+    let pack = try new u8[max_release_pack] --- in memory.heap
     defer free(pack) in memory.heap
     var definition: u8[65536]
-    let readme = try alloc u8[pages.max_readme] in memory.heap
+    let readme = try new u8[pages.max_readme] --- in memory.heap
     defer free(readme) in memory.heap
     var notes: u8[16384]
     for i in 0..<request.count:
@@ -674,7 +674,7 @@ pub func receive_pack(database: db.Database*, principal: str, owner: str, name: 
         if version.length == 0: continue
         let built = try tag_release(database, owner, name, updates[i].target, version, pack, definition, readme, notes)
         try site.publish_listing(site_root, owner, name, version, pack[..<built.pack_size],
-            (str)built.commit[0..], definition[..<built.definition_size], readme[..<built.readme_size])
+                                 (str)built.commit[0..], definition[..<built.definition_size], readme[..<built.readme_size])
         # The source browser is a convenience: a failure there never fails a release.
         publish_source(database, site_root, owner, name, version, built.tree) catch:
             recover ()
@@ -798,7 +798,7 @@ pub func advertise_receive(database: db.Database*, principal: str, owner: str, n
     defer children.release()
     let count = children.value().count()
     if count > max_refs: error(prism.invalid, "stored ref count exceeds limit")
-    let entries = try alloc AdvertisementRef[1024] in memory.heap
+    let entries = try new AdvertisementRef[1024] --- in memory.heap
     defer free(entries) in memory.heap
     var order: usize[1024]
     for i in 0..<count:
@@ -830,28 +830,28 @@ pub func advertise_receive(database: db.Database*, principal: str, owner: str, n
             let entry = &entries[i]
             if (str)entry.name[..<entry.length] != "refs/heads/main": continue
             var encoded: u8[40]
-            discard(try git.hex_id(entry.id, encoded))
-            let text = try format(line, f"{(str)encoded} HEAD\0{fetch_capabilities} symref=HEAD:refs/heads/main\n")
+            _ = try git.hex_id(entry.id, encoded)
+            let text = try strings.format(line, f"{(str)encoded} HEAD\0{fetch_capabilities} symref=HEAD:refs/heads/main\n")
             used += try git.encode_packet(git.PacketKind.data, text.bytes, output[used..])
             has_head = true
     let offered = fetch_capabilities if upload else receive_capabilities
     if count == 0:
-        let text = try format(line, f"0000000000000000000000000000000000000000 capabilities^{{}}\0{offered}\n")
+        let text = try strings.format(line, f"0000000000000000000000000000000000000000 capabilities^{{}}\0{offered}\n")
         used += try git.encode_packet(git.PacketKind.data, text.bytes, output[used..])
     var peel_budget: usize = 67108864
     for i in 0..<count:
         let entry = &entries[order[i]]
         var encoded: u8[40]
-        discard(try git.hex_id(entry.id, encoded))
+        _ = try git.hex_id(entry.id, encoded)
         let separator = "\0" if i == 0 and not has_head else ""
         let capabilities = offered if i == 0 and not has_head else ""
-        let text = try format(line, f"{(str)encoded} {(str)entry.name[..<entry.length]}{separator}{capabilities}\n")
+        let text = try strings.format(line, f"{(str)encoded} {(str)entry.name[..<entry.length]}{separator}{capabilities}\n")
         used += try git.encode_packet(git.PacketKind.data, text.bytes, output[used..])
         if upload and strings.starts_with((str)entry.name[..<entry.length], "refs/tags/"):
             var target: u8[20]
             if try peel(snapshot.value(), path, entry.id, target, &peel_budget):
-                discard(try git.hex_id(target, encoded))
-                let peeled = try format(line, f"{(str)encoded} {(str)entry.name[..<entry.length]}^{{}}\n")
+                _ = try git.hex_id(target, encoded)
+                let peeled = try strings.format(line, f"{(str)encoded} {(str)entry.name[..<entry.length]}^{{}}\n")
                 used += try git.encode_packet(git.PacketKind.data, peeled.bytes, output[used..])
     used += try git.encode_packet(git.PacketKind.flush, b"", output[used..])
     return used
@@ -873,7 +873,7 @@ struct Graph:
     var edges: usize
     var probes: usize
 
-    mutating func contains(id: const u8[]) -> bool!:
+    func contains(id: const u8[]) -> bool!:
         var bucket: usize = 0
         for byte in id: bucket = (bucket * 31 + (usize)byte) & (graph_slots - 1)
         while true:
@@ -884,7 +884,7 @@ struct Graph:
             if same(self.nodes[slot - 1].id, id): return true
             bucket = (bucket + 1) & (graph_slots - 1)
 
-    mutating func add(id: const u8[], kind: u8) -> !:
+    func add(id: const u8[], kind: u8) -> !:
         if id.length != 20 or zero_id(id): error(prism.invalid, "invalid graph identity")
         self.edges += 1
         if self.edges > max_graph_edges: error(prism.invalid, "graph edge limit exceeded")
@@ -909,7 +909,7 @@ struct Graph:
             bucket = (bucket + 1) & (graph_slots - 1)
 
     ## Add `id` as a trusted node: the walk neither reads it nor follows its references.
-    mutating func trust(id: const u8[]) -> !:
+    func trust(id: const u8[]) -> !:
         if try self.contains(id): return
         try self.add(id, 0)
         self.nodes[self.count - 1].trusted = true
@@ -917,7 +917,7 @@ struct Graph:
     ## Trust the history of every trusted node: the commits and tags its parents and tag
     ## targets reach. Only those small objects are read, never trees or blobs, so a push
     ## whose merge reaches an old fork point still stops at history already published.
-    mutating func trust_history(session: prism.Session*, path: str) -> !:
+    func trust_history(session: prism.Session*, path: str) -> !:
         var at: usize = 0
         while at < self.count:
             let trusted = self.nodes[at].trusted
@@ -939,12 +939,12 @@ struct Graph:
                 try git.decode_id(try git.decode_tag(object.payload).object, target)
                 try self.trust(target)
 
-    mutating func add_hex(id: str, kind: u8) -> !:
+    func add_hex(id: str, kind: u8) -> !:
         var bytes: u8[20]
         try git.decode_id(id, bytes)
         try self.add(bytes, kind)
 
-    mutating func validate(session: prism.Session*, path: str) -> !:
+    func validate(session: prism.Session*, path: str) -> !:
         var at: usize = 0
         var total: usize = 0
         while at < self.count:
@@ -961,7 +961,7 @@ struct Graph:
             if self.nodes[at].kind != 0 and self.nodes[at].kind != actual: error(prism.invalid, "graph target type mismatch")
             self.nodes[at].kind = actual
             if actual == 2:
-                discard(try git.validate_tree(object.payload))
+                _ = try git.validate_tree(object.payload)
                 var offset: usize = 0
                 while offset < object.payload.length:
                     let entry = try git.decode_tree_entry(object.payload[offset..])
@@ -1010,13 +1010,13 @@ pub func upload_pack(database: db.Database*, principal: str, owner: str, name: s
             error(prism.invalid, "unsupported fetch capability")
         start = i + 1
     if request.wants == 0: return 0
-    let nodes = try alloc GraphNode[max_graph_objects] in memory.heap
+    let nodes = try new GraphNode[max_graph_objects] --- in memory.heap
     defer free(nodes) in memory.heap
-    let slots = try alloc usize[graph_slots] in memory.heap
+    let slots = try new usize[graph_slots] --- in memory.heap
     defer free(slots) in memory.heap
-    let common_nodes = try alloc GraphNode[max_graph_objects] in memory.heap
+    let common_nodes = try new GraphNode[max_graph_objects] --- in memory.heap
     defer free(common_nodes) in memory.heap
-    let common_slots = try alloc usize[graph_slots] in memory.heap
+    let common_slots = try new usize[graph_slots] --- in memory.heap
     defer free(common_slots) in memory.heap
     for i in 0..<slots.length:
         slots[i] = 0
@@ -1070,17 +1070,17 @@ pub func upload_pack(database: db.Database*, principal: str, owner: str, name: s
     var used: usize = 0
     if have_common:
         var encoded: u8[40]
-        discard(try git.hex_id(acknowledged, encoded))
+        _ = try git.hex_id(acknowledged, encoded)
         var buffer: u8[64]
-        let line = try format(buffer, f"ACK {(str)encoded}\n")
+        let line = try strings.format(buffer, f"ACK {(str)encoded}\n")
         used = try git.encode_packet(git.PacketKind.data, line.bytes, output)
     else:
         used = try git.encode_packet(git.PacketKind.data, b"NAK\n", output)
     if not request.done: return used
     try common.validate(session, path)
-    let objects = try alloc git.Object[max_graph_objects] in memory.heap
+    let objects = try new git.Object[max_graph_objects] --- in memory.heap
     defer free(objects) in memory.heap
-    let leases = try alloc FetchLease[max_graph_objects] in memory.heap
+    let leases = try new FetchLease[max_graph_objects] --- in memory.heap
     defer free(leases) in memory.heap
     var count: usize = 0
     defer release_fetch_leases(leases, &count)
@@ -1126,9 +1126,9 @@ func apply_refs(database: db.Database*, path: str, principal: str, updates: cons
     let tx = try database.begin()
     defer tx.release()
     try require_owner(tx.value(), path, principal)
-    let nodes = try alloc GraphNode[max_graph_objects] in memory.heap
+    let nodes = try new GraphNode[max_graph_objects] --- in memory.heap
     defer free(nodes) in memory.heap
-    let slots = try alloc usize[graph_slots] in memory.heap
+    let slots = try new usize[graph_slots] --- in memory.heap
     defer free(slots) in memory.heap
     for i in 0..<slots.length: slots[i] = 0
     var graph = Graph(nodes = nodes, slots = slots)
@@ -1235,7 +1235,7 @@ pub func remove(database: db.Database*, owner: str, name: str) -> Removal!:
         let listed = try session.children(objects_root)
         defer listed.release()
         result.objects = listed.value().count()
-        if result.objects > 0: ids = try alloc u8[result.objects * 20] in memory.heap
+        if result.objects > 0: ids = try new u8[result.objects * 20] --- in memory.heap
         for i in 0..<result.objects:
             let location = try listed.value().at(i)
             if location.length < 40: error(prism.invalid, "invalid stored object listing")
@@ -1256,7 +1256,7 @@ pub func remove(database: db.Database*, owner: str, name: str) -> Removal!:
     let snapshot = try database.snapshot()
     defer snapshot.release()
     let session = snapshot.value()
-    let others = try alloc u8[256 * 192] in memory.heap
+    let others = try new u8[256 * 192] --- in memory.heap
     defer free(others) in memory.heap
     var other_lengths: usize[256]
     var other_count: usize = 0

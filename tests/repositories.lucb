@@ -24,15 +24,15 @@ func boundaries(database: db.Database*, write: bool) -> !:
     for i in 0..<(usize)64: name[i] = 'a'
     if write: try repositories.create(database, "alice", (str)name)
     # One MiB: the largest object the former in-database layout kept in one value.
-    let payload = try alloc u8[1048576 - 13] in memory.heap
+    let payload = try new u8[1048576 - 13] --- in memory.heap
     defer free(payload) in memory.heap
     for i in 0..<payload.length: payload[i] = (u8)(i % 256)
-    let wire = try alloc u8[1048576] in memory.heap
+    let wire = try new u8[1048576] --- in memory.heap
     defer free(wire) in memory.heap
     let count = try git.encode_object("blob", payload, wire)
     assert(count == 1048576)
     var id: u8[20]
-    discard(try git.hash_blob(payload, id))
+    _ = try git.hash_blob(payload, id)
     if write:
         var result: u8[20]
         try repositories.put_object(database, "alice", "alice", (str)name, wire, result)
@@ -50,7 +50,7 @@ func check(database: db.Database*, write: bool) -> !:
         var wire: u8[128]
         let n = try wire_for(kind, wire)
         var id: u8[20]
-        discard(try git.hash_object(kind, b"binary\0payload\n", id))
+        _ = try git.hash_object(kind, b"binary\0payload\n", id)
         if write:
             var result: u8[20]
             try repositories.put_object(database, "alice", "alice", "test-package", wire[..<n], result)
@@ -112,7 +112,7 @@ func negative(database: db.Database*) -> !:
         assert(failure.code == prism.missing)
         missing = true
     assert(missing)
-    let oversize = try alloc u8[repositories.max_object_bytes + 1] in memory.heap
+    let oversize = try new u8[repositories.max_object_bytes + 1] --- in memory.heap
     defer free(oversize) in memory.heap
     var bounded = false
     repositories.put_object(database, "alice", "alice", "test-package", oversize, id) catch failure:
@@ -125,7 +125,7 @@ func negative(database: db.Database*) -> !:
         assert(failure.code == prism.invalid)
         short_rejected = true
     assert(short_rejected)
-    discard(try git.hash_object("blob", b"binary\0payload\n", id))
+    _ = try git.hash_object("blob", b"binary\0payload\n", id)
     var read_denied = false
     let wrong = repositories.get_object(database, "mallory", "alice", "test-package", id) catch failure:
         assert(failure.code == prism.invalid)
@@ -139,9 +139,9 @@ func corruption(database: db.Database*, database_path: str) -> !:
     var id: u8[20]
     try repositories.put_object(database, "alice", "alice", "test-package", b"blob 1\0x", id)
     var encoded_id: u8[40]
-    discard(try git.hex_id(id, encoded_id))
+    _ = try git.hex_id(id, encoded_id)
     var path: u8[1024]
-    let file = try strings.copy(try format(path, f"{database_path}.objects/{(str)encoded_id[..<2]}/{(str)encoded_id[2..]}"))
+    let file = try strings.copy(try strings.format(path, f"{database_path}.objects/{(str)encoded_id[..<2]}/{(str)encoded_id[2..]}"))
     defer strings.release(file)
     try files.write((c.str)file, b"blob 1\0y")
     var conflict = false
@@ -170,19 +170,19 @@ func race_attempt() -> !:
     defer database.release()
     while start.load(.acquire) == 0: thread.sleep(1)
     repositories.create(database.value(), "alice", "race") catch failure:
-        if failure.code == prism.conflict: discard(conflicts.add(1, .relaxed))
+        if failure.code == prism.conflict: _ = conflicts.add(1, .relaxed)
         else:
             print(failure.message)
-            discard(unexpected.add(1, .relaxed))
+            _ = unexpected.add(1, .relaxed)
         return
-    discard(successes.add(1, .relaxed))
+    _ = successes.add(1, .relaxed)
 
 func race_worker(raw: void*?):
-    discard(raw)
-    discard(ready.add(1, .release))
+    _ = raw
+    _ = ready.add(1, .release)
     race_attempt() catch failure:
         print(failure.message)
-        discard(unexpected.add(1, .relaxed))
+        _ = unexpected.add(1, .relaxed)
 
 func race(database: db.Database*) -> !:
     try database.listen()

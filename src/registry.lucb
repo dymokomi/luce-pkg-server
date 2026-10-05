@@ -116,9 +116,9 @@ func pull_request_document(record: repositories.PullRequest*) -> interop.Referen
     var base_id: u8[40]
     var head_id: u8[40]
     var merge_id: u8[40]
-    discard(try git.hex_id(record.base_id, base_id))
-    discard(try git.hex_id(record.head_id, head_id))
-    discard(try git.hex_id(record.merge_id, merge_id))
+    _ = try git.hex_id(record.base_id, base_id)
+    _ = try git.hex_id(record.head_id, head_id)
+    _ = try git.hex_id(record.merge_id, merge_id)
     try value.set_integer("number", record.number)
     try value.set_text("author", (str)record.author[..<record.author_length])
     try value.set_text("title", (str)record.title[..<record.title_length])
@@ -147,12 +147,13 @@ struct App:
     var site: u8[255]
     var site_size: usize = 0
 
-    mutating func close():
+    func close():
         self.authority.release()
         self.database.release()
 
     func health(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
-        discard(view)
+        _ = self
+        _ = view
         return reply("ok")
 
     func identity(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
@@ -292,7 +293,7 @@ struct App:
             principal = authorized.value().text_at() catch: return reply("internal error", 500)
         defer if_upload_leave(upload)
         if request.method() == "GET" or request.method() == "HEAD":
-            let output = alloc u8[4194304] in memory.heap catch: return reply("internal error", 500)
+            let output = new u8[4194304] --- in memory.heap catch: return reply("internal error", 500)
             defer free(output) in memory.heap
             let n = repositories.advertise_receive(self.database.value(), principal, owner, name, output, upload) catch failure:
                 if failure.code == auth.missing: return reply("repository not found", 404)
@@ -309,8 +310,8 @@ struct App:
             defer release_inflated(inflated)
             var wire: const u8[] = received
             if let bytes = inflated: wire = bytes
-            discard(git.decode_fetch(wire) catch: return reply("invalid fetch request", 400))
-            let output = alloc u8[67108864] in memory.heap catch: return reply("internal error", 500)
+            _ = git.decode_fetch(wire) catch: return reply("invalid fetch request", 400)
+            let output = new u8[67108864] --- in memory.heap catch: return reply("internal error", 500)
             defer free(output) in memory.heap
             let n = repositories.upload_pack(self.database.value(), principal, owner, name, wire, output) catch:
                 return reply("fetch rejected", 403)
@@ -336,7 +337,7 @@ struct App:
                 start = i + 1
         # Reserve bounded status storage before any ref mutation. The parser can
         # return 64 names of up to 4096 bytes, even when policy rejects them.
-        let output = alloc u8[270336] in memory.heap catch: return reply("internal error", 500)
+        let output = new u8[270336] --- in memory.heap catch: return reply("internal error", 500)
         defer free(output) in memory.heap
         var accepted = true
         # Release-rule failures and the limits a push exceeded are reported to the pusher, who
@@ -344,24 +345,24 @@ struct App:
         # generic.
         var reason_buffer: u8[160]
         var reason_size: usize = 0
-        discard(repositories.receive_pack(self.database.value(), principal, owner, name, wire, (str)self.site[..<self.site_size]) catch failure:
+        _ = repositories.receive_pack(self.database.value(), principal, owner, name, wire, (str)self.site[..<self.site_size]) catch failure:
             accepted = false
             # The pusher sees only those reasons; the journal keeps every one, as
             # one line of plain text whatever bytes the message holds.
             var log_line: u8[512]
-            var used = (format(log_line, f"push to {owner}/{name} refused: ") catch: recover "").length
+            var used = (strings.format(log_line, f"push to {owner}/{name} refused: ") catch: recover "").length
             for byte in failure.message.bytes:
                 if used == log_line.length - 1: break
                 log_line[used] = byte if byte >= 0x20 and byte < 0x7f else '?'
                 used += 1
             log_line[used] = '\n'
-            discard(io.stderr().write(log_line[..<used + 1]) catch: recover 0)
+            _ = io.stderr().write(log_line[..<used + 1]) catch: recover 0
             let explained = failure.message if strings.starts_with(failure.message, "release: ") or strings.ends_with(failure.message, " limit exceeded") else ""
             for byte in explained.bytes:
                 if reason_size == reason_buffer.length: break
                 reason_buffer[reason_size] = byte if byte >= 0x20 and byte < 0x7f else ' '
                 reason_size += 1
-            recover 0)
+            recover 0
         let reason = (str)reason_buffer[..<reason_size] if reason_size > 0 else "transaction rejected"
         if not report:
             if not accepted: return reply("push rejected", 409)
@@ -370,7 +371,7 @@ struct App:
         for i in 0..<commands.count:
             let command = commands.at(i) catch: return reply("invalid push", 400)
             var line: u8[4352]
-            let text = format(line, f"ok {command.name}\n" if accepted else f"ng {command.name} {reason}\n") catch: return reply("internal error", 500)
+            let text = strings.format(line, f"ok {command.name}\n" if accepted else f"ng {command.name} {reason}\n") catch: return reply("internal error", 500)
             used += git.encode_packet(git.PacketKind.data, text.bytes, output[used..]) catch: return reply("internal error", 500)
         used += git.encode_packet(git.PacketKind.flush, b"", output[used..]) catch: return reply("internal error", 500)
         return binary_reply(output[..<used], "application/x-git-receive-pack-result")
@@ -392,14 +393,14 @@ struct Readers:
     var mutex: sync.Mutex
     var active: u32
 
-    mutating func enter() -> bool:
+    func enter() -> bool:
         self.mutex.lock()
         defer self.mutex.unlock()
         if self.active >= 6: return false
         self.active += 1
         return true
 
-    mutating func leave():
+    func leave():
         self.mutex.lock()
         defer self.mutex.unlock()
         if self.active > 0: self.active -= 1
@@ -496,7 +497,7 @@ func configure(socket: str) -> interop.Outcome[http.Application]:
 
 func run(arguments: str[]) -> i32!:
     if arguments.length != 3: return 2
-    discard(try configured_origin())
+    _ = try configured_origin()
     var port: i64 = 0
     for byte in arguments[2].bytes:
         if byte < '0' or byte > '9': return 2
@@ -511,13 +512,13 @@ func run(arguments: str[]) -> i32!:
     try repositories.use_objects(arguments[1])
     try owner.value().listen()
     var socket_buffer: u8[4096]
-    let socket = try format(socket_buffer, f"{arguments[1]}.sock")
+    let socket = try strings.format(socket_buffer, f"{arguments[1]}.sock")
     var options = http.ServerConfig(address = "127.0.0.1", port = port, network_workers = 2, application_workers = 2,
-        body_limit = (i64)max_release_upload, memory_body_limit = 65536,
-        response_limit = (i64)repositories.max_object_bytes,
-        request_timeout_ms = 300000, idle_timeout_ms = 15000,
-        response_timeout_ms = 300000, application_timeout_ms = 300000,
-        shutdown_timeout_ms = 30000)
+                                    body_limit = (i64)max_release_upload, memory_body_limit = 65536,
+                                    response_limit = (i64)repositories.max_object_bytes,
+                                    request_timeout_ms = 300000, idle_timeout_ms = 15000,
+                                    response_timeout_ms = 300000, application_timeout_ms = 300000,
+                                    shutdown_timeout_ms = 30000)
     var server = try http.Server(options, interop.WorkerEntry[str, unit, unit].native(configure), socket)
     defer server.close()
     try server.shutdown_on_signals()

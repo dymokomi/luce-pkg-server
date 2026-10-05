@@ -40,7 +40,7 @@ pub func inflate(data: const u8[], limit: usize) -> u8[]!:
     var decoder = codec.make_decoder("raw", (i64)body.length, (i64)limit) catch failure:
         error(prism.invalid, failure.message)
     defer decoder.close()
-    var output = try alloc u8[limit if limit < 65536 else 65536] in memory.heap
+    var output = try new u8[limit if limit < 65536 else 65536] --- in memory.heap
     errdefer free(output) in memory.heap
     var consumed: usize = 0
     var produced: usize = 0
@@ -48,7 +48,7 @@ pub func inflate(data: const u8[], limit: usize) -> u8[]!:
         if produced == output.length:
             if output.length == limit: error(prism.invalid, "gzip body exceeds the request limit")
             let grown = output.length * 2 if output.length * 2 < limit else limit
-            let larger = try alloc u8[grown] in memory.heap
+            let larger = try new u8[grown] --- in memory.heap
             memory.copy(larger, output, produced)
             free(output) in memory.heap
             output = larger
@@ -64,7 +64,7 @@ pub func inflate(data: const u8[], limit: usize) -> u8[]!:
     let expected_size = u32_at(data, data.length - 4)
     if (u64)compress.crc32(output[..<produced]) != expected_crc or ((u64)produced & 0xffffffff) != expected_size:
         error(prism.invalid, "gzip body fails its checksum")
-    let exact = try alloc u8[produced] in memory.heap
+    let exact = try new u8[produced] --- in memory.heap
     memory.copy(exact, output, produced)
     free(output) in memory.heap
     return exact
