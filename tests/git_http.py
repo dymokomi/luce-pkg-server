@@ -198,7 +198,7 @@ language = "luce-base"
     site = root / 'site' / 'testuser' / 'git-wire'
     git('checkout', '-q', '-b', 'release-line')
     (repo / 'package.prisma').write_text('#prisma 4.0\ndef package "git-wire" {\n    str owner = "testuser"\n'
-        '    str version = "1.3.0"\n    str kind = "package"\n    str language = "luce-base"\n    str description = "Release fixture"\n    str readme = "README.md"\n}\n')
+        '    str version = "1.3.0"\n    str kind = "package"\n    str language = "luce-base"\n    str description = "Release fixture"\n    str license = "MIT OR Apache-2.0"\n    str readme = "README.md"\n}\n')
     (repo / 'docs').mkdir()
     (repo / 'docs/shot.png').write_bytes(b'\x89PNG fixture')
     (repo / 'README.md').write_text('# git-wire\n\n![shot](docs/shot.png) and [notes](docs/notes.md) and [bad](javascript:alert(1))\n')
@@ -230,6 +230,7 @@ language = "luce-base"
     assert True and 'id="applications"' not in front
     detail = (site / 'index.html').read_text()
     assert '<h1>testuser/git-wire</h1>' in detail and 'luc add testuser/git-wire' in detail
+    assert 'License <code>MIT OR Apache-2.0</code>.' in detail
     assert hashlib.sha256(pack).hexdigest() in detail and released[:12] in detail
     assert 'First fixture release.' in detail and '- adds &lt;package.prisma&gt;' in detail
     assert '<img src="/testuser/git-wire/1.3.0/raw/docs/shot.png"' in detail and 'href="/testuser/git-wire/1.3.0/blob/docs/notes.md.html"' in detail and 'href="#">bad' in detail
