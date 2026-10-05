@@ -55,6 +55,7 @@ def main():
         run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/deployment.py"), output / "admin"], timeout=timeout)
         run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/storage.py"), output / "registry", output / "admin", output / "account-fixture"], timeout=timeout)
         run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/remove.py"), output / "registry", output / "admin", output / "account-fixture"], timeout=timeout)
+        run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/rebuild.py"), output / "registry", output / "admin", output / "account-fixture"], timeout=timeout)
         run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/migration.py"), output / "registry", output / "admin", output / "legacy-fixture"], timeout=timeout)
         if mode in PUBLISH_MODES:
             # luc, at bootstrap/LUC beside this repository, publishing to this registry

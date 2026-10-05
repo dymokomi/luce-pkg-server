@@ -15,7 +15,8 @@ package index for Luce and Luce Base, written in Luce Base. MIT OR Apache-2.0.
   is not on the path of a download.
 - **Git hosting.** Native Git Smart HTTP, refs and object listings in Prism, object
   bytes in content-addressed files: anonymous clone and
-  fetch, authenticated push with atomic ref updates, released tags immutable.
+  fetch, authenticated push with atomic ref updates; a push never moves or deletes a
+  release tag, an operator can withdraw one.
 - **Accounts.** Invitation-only registration, password login, sessions that last
   until revoked, and short-lived repository credentials for Git. Registration can
   be closed once the intended accounts exist.
@@ -32,7 +33,7 @@ package index for Luce and Luce Base, written in Luce Base. MIT OR Apache-2.0.
 | `src/objects.lucb` | the content-addressed object files beside the database |
 | `src/migrate.lucb` | `luce-pkg-admin migrate`: objects out of the database, once |
 | `src/site.lucb`, `pages.lucb` | the static site: listings, pages, source browser |
-| `src/admin.lucb` | `luce-pkg-admin`: store token, init, invite, checkpoint, migrate, remove |
+| `src/admin.lucb` | `luce-pkg-admin`: store token, init, invite, checkpoint, migrate, remove, withdraw, rebuild-site |
 | `deploy/` | systemd unit, Caddyfile, host limits, backup and restore, the release bundle builder |
 | `docs/CONTRACTS.md` | the decisions the design rests on |
 

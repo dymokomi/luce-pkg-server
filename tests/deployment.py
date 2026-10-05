@@ -65,21 +65,14 @@ with tempfile.TemporaryDirectory(prefix='luce-pkg-deploy-', dir='/tmp') as tempo
     assert (restored / 'registry.db').is_file()
     subprocess.run([admin, 'checkpoint', restored / 'registry.db'], env=environment,
                    check=True, capture_output=True, timeout=60)
-    # The public site directory travels with the state and is checked the same way.
-    site = root / 'site'
-    (site / 'acme/demo').mkdir(parents=True)
-    (site / 'acme/demo/1.0.0.pack').write_bytes(b'PACK fixture')
-    (site / 'index').write_text('acme/demo\t1.0.0\tfixture\n')
-    with_site = root / 'backup-with-site'
-    subprocess.run([ROOT / 'deploy/backup.sh', state, database, admin, environment_file, with_site, site],
-                   check=True, capture_output=True, timeout=60)
-    subprocess.run([ROOT / 'deploy/restore.sh', with_site, root / 'restored-state', admin, environment_file,
+    # The public site is not in the backup: restore rebuilds it from the restored database.
+    assert not (backup / 'site').exists()
+    subprocess.run([ROOT / 'deploy/restore.sh', backup, root / 'restored-state', admin, environment_file,
                     root / 'restored-site'], check=True, capture_output=True, timeout=60)
-    assert (root / 'restored-site/acme/demo/1.0.0.pack').read_bytes() == b'PACK fixture'
-    (with_site / 'site/index').write_text('tampered\n')
-    tampered = subprocess.run([ROOT / 'deploy/restore.sh', with_site, root / 'rejected-state', admin, environment_file,
-                               root / 'rejected-site'], capture_output=True, timeout=60)
-    assert tampered.returncode != 0 and not (root / 'rejected-site').exists() and not (root / 'rejected-state').exists()
+    assert (root / 'restored-site/index.html').is_file() and (root / 'restored-state/registry.db').is_file()
+    clobber = subprocess.run([ROOT / 'deploy/restore.sh', backup, root / 'clobber-state', admin, environment_file,
+                              root / 'restored-site'], capture_output=True, timeout=60)
+    assert clobber.returncode != 0 and not (root / 'clobber-state').exists()
     # Any altered state byte must make restoration fail without publishing a path.
     regular = next(path for path in (backup / 'state').rglob('*') if path.is_file())
     regular.write_bytes(regular.read_bytes() + b'corrupt')

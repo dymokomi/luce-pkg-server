@@ -61,10 +61,9 @@ Content-Security-Policy that forbids inline script.
 
 The setgid bit gives new files the `caddy` group, and the unit's `UMask=0027`
 makes them group-readable. The database directory stays `0700`, so the wider
-umask exposes nothing there. Back this directory up together with the database by
-passing it as the last argument of `backup.sh`, and restore it with the last
-argument of `restore.sh`: it is derived from repository state, but nothing
-rebuilds it, and re-pushing an existing tag is a no-op for Git.
+umask exposes nothing there. Nothing here needs a backup: everything except
+`assets/` is derived from the database, and `luce-pkg-admin rebuild-site` writes
+it again (see Backup and restore).
 
 Never place the token in an argument, repository, log, backup directory, or Caddy
 configuration. Initialize once while the service is stopped:
@@ -159,9 +158,31 @@ repository lists, and everything the site holds for the package: its `index` lin
 release packs, definitions and notes, `versions`, package page and source browser;
 then it rewrites the front pages. It refuses while another package's latest release
 depends on the package, printing those packages; `--force` removes it anyway. The
-wrapper passes `LUCE_REGISTRY_SITE` from the environment file. Released versions are
-otherwise immutable, so a removed name can be created again but its old versions are
-gone for good, including from any `luc.lock` that pinned them.
+wrapper passes `LUCE_REGISTRY_SITE` from the environment file. A removed name can be
+created again, but its old versions are gone for good, including from any `luc.lock`
+that pinned them.
+
+## Withdrawing releases
+
+Pushes never move or delete a release tag. An operator withdraws old releases of a
+package, then rebuilds the site without them and swaps it in:
+
+```sh
+sudo /usr/local/sbin/luce-pkg-admin-run withdraw /var/lib/luce-pkg-server/registry.db.sock owner/name 0.1.0 0.1.1
+sudo install -d -o luce-pkg -g caddy -m 2750 /var/lib/luce-pkg-site.new
+sudo /usr/local/sbin/luce-pkg-admin-run rebuild-site /var/lib/luce-pkg-server/registry.db.sock /var/lib/luce-pkg-site.new
+sudo install -d -o luce-pkg -g caddy -m 2750 /var/lib/luce-pkg-site.new/assets
+sudo install -o luce-pkg -g caddy -m 0640 /opt/luce-pkg-server/current/site-assets/* /var/lib/luce-pkg-site.new/assets/
+sudo mv /var/lib/luce-pkg-site /var/lib/luce-pkg-site.old && sudo mv /var/lib/luce-pkg-site.new /var/lib/luce-pkg-site
+```
+
+`withdraw` deletes each version's tag; the newest release of a package always
+stays (remove the package to drop it). The objects stay, since the branch history
+still reaches them. A `luc.lock` that pinned a withdrawn version no longer
+resolves. `rebuild-site` writes into a new or empty directory and refuses one that
+already holds a site; a push during the rebuild lands in the old site, so pause
+pushes or rebuild again.
+Delete `/var/lib/luce-pkg-site.old` once the new site checks out.
 
 ## Abuse and bandwidth limits
 
@@ -185,6 +206,10 @@ Backups deliberately require service downtime. Stop the registry, run `backup.sh
 with absolute paths, then restart and verify `/health`. The script checkpoints the
 native Prism database, copies the complete state directory into a fresh directory,
 and writes SHA-256 checksums. It never copies the environment file or store token.
+The public site is not backed up: given a fifth argument, `restore.sh` rebuilds it
+there from the restored database with `luce-pkg-admin rebuild-site` and copies in
+the bundle's `site-assets`. Run the restore as the service user, or `chown` both
+directories afterwards.
 
 `restore.sh` verifies every checksum and restores only into a path that does not
 exist. It opens and checkpoints the copied database before atomically publishing

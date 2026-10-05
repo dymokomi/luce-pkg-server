@@ -278,10 +278,15 @@ func checked_object(session: prism.Session*, path: str, id: const u8[]) -> inter
 
 pub let max_refs: usize = 1024
 
-struct VersionEntry:
+## One release tag of a repository: its version and the tag object the ref names.
+struct ReleaseTag:
     var bytes: u8[62]
     var length: usize
     var parsed: pkg.Version
+    var target: u8[20]
+
+    func version() -> str:
+        return (str)self.bytes[..<self.length]
 
 func newer(left: pkg.Version, right: pkg.Version) -> bool:
     if left.major != right.major: return left.major > right.major
@@ -291,7 +296,44 @@ func newer(left: pkg.Version, right: pkg.Version) -> bool:
 func nibble(byte: u8) -> u8!:
     if byte >= '0' and byte <= '9': return byte - '0'
     if byte >= 'a' and byte <= 'f': return byte - 'a' + 10
-    error(prism.invalid, "invalid encoded release version")
+    error(prism.invalid, "invalid hex-encoded name")
+
+## The package name `repo_path` stored hex-encoded, decoded into `output`.
+func decoded_name(encoded: str, output: u8[]) -> str!:
+    if encoded.length % 2 != 0 or encoded.length // 2 > output.length: error(prism.invalid, "invalid stored repository name")
+    for i in 0..<encoded.length // 2:
+        output[i] = try nibble(encoded.bytes[i * 2]) * 16 + try nibble(encoded.bytes[i * 2 + 1])
+    return (str)output[..<encoded.length // 2]
+
+## The repository's release tags in `tags`, oldest version first; returns how many.
+func release_tags(session: prism.Session*, path: str, tags: ReleaseTag[]) -> usize!:
+    var refs_buffer: u8[208]
+    let refs_root = try join([path, "/refs"], refs_buffer)
+    if not try session.contains(refs_root): return 0
+    let refs = try session.children(refs_root)
+    defer refs.release()
+    var count: usize = 0
+    for i in 0..<refs.value().count():
+        let location = try refs.value().at(i)
+        let label = try session.get(location, "name")
+        defer label.release()
+        let ref_name = try label.value().text_at()
+        let version = release_version(ref_name)
+        if version.length == 0: continue
+        if count == tags.length or version.length > tags[count].bytes.length: error(prism.invalid, "too many release tags")
+        let held = try read_ref(session, location, ref_name)
+        defer held.release()
+        var tag = ReleaseTag(length = version.length, parsed = try pkg.parse_version(version))
+        for j in 0..<version.length: tag.bytes[j] = version.bytes[j]
+        for j in 0..<(usize)20: tag.target[j] = held.value().bytes()[j]
+        # Insertion keeps the list sorted: a repository holds at most max_refs tags.
+        var at = count
+        while at > 0 and newer(tags[at - 1].parsed, tag.parsed):
+            tags[at] = tags[at - 1]
+            at -= 1
+        tags[at] = tag
+        count += 1
+    return count
 
 ## `refs/tags/v<major.minor.patch>` names a release; any other tag is an ordinary tag.
 func release_version(ref_name: str) -> str:
@@ -564,6 +606,116 @@ func publish_source(database: db.Database*, site_root: str, owner: str, name: st
     let coordinate = try strings.format(title, f"{owner}/{name}")
     var budget = max_graph_objects
     try source_directory(snapshot.value(), path, tree, site_root, owner, name, coordinate, version, "", html, 0, &budget)
+
+## What `rebuild_site` wrote.
+pub struct Rebuilt:
+    pub var packages: usize
+    pub var releases: usize
+    pub var failed: usize
+
+## Repositories `rebuild_site` walks.
+let max_repositories: usize = 1024
+
+## Write the public site from repository state alone: every release tag of every
+## repository, oldest first, publishes exactly what its push published (release files,
+## listing, package page, source browser). The site therefore needs no backup of its
+## own. `site_root` should be new: files already there are kept or, for a release file
+## with different bytes, refused. A release that fails is reported and skipped.
+pub func rebuild_site(database: db.Database*, site_root: str) -> Rebuilt!:
+    var result: Rebuilt
+    # Coordinates first, from one snapshot; each release then takes its own.
+    let coordinates = try new u8[max_repositories * 192] --- in memory.heap
+    defer free(coordinates) in memory.heap
+    let lengths = try new usize[max_repositories] in memory.heap
+    defer free(lengths) in memory.heap
+    if true:
+        let snapshot = try database.snapshot()
+        defer snapshot.release()
+        let session = snapshot.value()
+        if try session.contains("/repositories"):
+            let owners = try session.children("/repositories")
+            defer owners.release()
+            for i in 0..<owners.value().count():
+                let owner_location = try owners.value().at(i)
+                let owner = paths.base(owner_location)
+                let repositories_of_owner = try session.children(owner_location)
+                defer repositories_of_owner.release()
+                for j in 0..<repositories_of_owner.value().count():
+                    var name_buffer: u8[64]
+                    let name = try decoded_name(paths.base(try repositories_of_owner.value().at(j)), name_buffer)
+                    if result.packages == max_repositories: error(prism.invalid, "too many repositories to rebuild")
+                    let slot = coordinates[result.packages * 192..<result.packages * 192 + 192]
+                    lengths[result.packages] = (try strings.format(slot, f"{owner}/{name}")).length
+                    result.packages += 1
+    let tags = try new ReleaseTag[max_refs] --- in memory.heap
+    defer free(tags) in memory.heap
+    let pack = try new u8[max_release_pack] --- in memory.heap
+    defer free(pack) in memory.heap
+    var definition: u8[65536]
+    let readme = try new u8[pages.max_readme] --- in memory.heap
+    defer free(readme) in memory.heap
+    var notes: u8[16384]
+    for i in 0..<result.packages:
+        let coordinate = (str)coordinates[i * 192..<i * 192 + lengths[i]]
+        let (owner, name) = strings.split_once(coordinate, "/") else continue
+        var path_buffer: u8[192]
+        let path = try repo_path(owner, owner, name, path_buffer)
+        var count: usize
+        if true:
+            let snapshot = try database.snapshot()
+            defer snapshot.release()
+            count = try release_tags(snapshot.value(), path, tags)
+        for j in 0..<count:
+            let version = tags[j].version()
+            rebuild_release(database, site_root, owner, name, version, tags[j].target[0..], pack, definition, readme, notes) catch failure:
+                print(f"{coordinate} {version}: {failure.message}")
+                result.failed += 1
+                recover ()
+            result.releases += 1
+    try site.ensure_front_page(site_root)
+    result.releases -= result.failed
+    return result
+
+## Publish one release the way its push did.
+func rebuild_release(database: db.Database*, site_root: str, owner: str, name: str, version: str, target: const u8[],
+                     pack: u8[], definition: u8[], readme: u8[], notes: u8[]) -> !:
+    let built = try tag_release(database, owner, name, target, version, pack, definition, readme, notes)
+    try site.publish_files(site_root, owner, name, version, pack[..<built.pack_size], definition[..<built.definition_size], notes[..<built.notes_size])
+    try site.publish_listing(site_root, owner, name, version, pack[..<built.pack_size],
+                             (str)built.commit[0..], definition[..<built.definition_size], readme[..<built.readme_size])
+    # As at push time, the source browser never fails a release.
+    publish_source(database, site_root, owner, name, version, built.tree) catch:
+        recover ()
+
+## Withdraw one release: delete its tag ref, which a push can never do. Its objects stay
+## listed (the branch history still reaches them); its files leave the site with the
+## next `rebuild_site`. The newest release is refused: remove the package instead.
+pub func withdraw(database: db.Database*, owner: str, name: str, version: str) -> !:
+    _ = try pkg.parse_version(version)
+    var path_buffer: u8[192]
+    let path = try repo_path(owner, owner, name, path_buffer)
+    var ref_buffer: u8[96]
+    let ref_name = try strings.format(ref_buffer, f"refs/tags/v{version}")
+    var target: u8[20]
+    if true:
+        let snapshot = try database.snapshot()
+        defer snapshot.release()
+        let session = snapshot.value()
+        if not try session.contains(path): error(prism.missing, "no such repository")
+        let tags = try new ReleaseTag[max_refs] --- in memory.heap
+        defer free(tags) in memory.heap
+        let count = try release_tags(session, path, tags)
+        var found = false
+        for i in 0..<count:
+            if tags[i].version() != version: continue
+            if i == count - 1: error(prism.invalid, "the newest release cannot be withdrawn; remove the package instead")
+            for j in 0..<(usize)20: target[j] = tags[i].target[j]
+            found = true
+        if not found: error(prism.missing, "no such release")
+    var zero: u8[20]
+    var updates: RefUpdate[1]
+    updates[0] = RefUpdate(name = ref_name, expected = target[0..], target = zero[0..])
+    try update_refs(database, owner, owner, name, updates[0..])
 
 func push_capabilities(capabilities: str) -> !:
     var start: usize = 0

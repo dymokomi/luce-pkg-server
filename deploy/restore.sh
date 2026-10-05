@@ -3,6 +3,7 @@ set -euo pipefail
 
 if [[ $# -ne 4 && $# -ne 5 ]]; then
   echo "usage: restore.sh BACKUP_DIR NEW_DATA_DIR ADMIN ENVIRONMENT_FILE [NEW_SITE_DIR]" >&2
+  echo "NEW_SITE_DIR is rebuilt from the restored database, with the bundle's site-assets" >&2
   exit 2
 fi
 
@@ -13,17 +14,8 @@ environment_file=$4
 new_site=${5:-}
 if [[ -n "$new_site" ]]; then
   [[ "$new_site" = /* && "$new_site" != / ]] || { echo "site path must be absolute" >&2; exit 2; }
-  [[ -d "$backup/site" && -f "$backup/SITE_SHA256SUMS" ]] || { echo "backup holds no site files" >&2; exit 1; }
   [[ ! -e "$new_site" ]] || { echo "site restore destination already exists" >&2; exit 1; }
   [[ -d "$(dirname "$new_site")" ]] || { echo "site restore parent does not exist" >&2; exit 1; }
-  (
-    cd "$backup/site"
-    if command -v sha256sum >/dev/null 2>&1; then
-      sha256sum -c "$backup/SITE_SHA256SUMS"
-    else
-      shasum -a 256 -c "$backup/SITE_SHA256SUMS"
-    fi
-  ) >/dev/null
 fi
 for path in "$backup" "$destination" "$admin" "$environment_file"; do
   [[ "$path" = /* ]] || { echo "all paths must be absolute" >&2; exit 2; }
@@ -52,12 +44,20 @@ set -a
 source "$environment_file"
 set +a
 "$admin" checkpoint "$staging/registry.db" >/dev/null
-unset LUCE_REGISTRY_STORE_TOKEN LUCE_REGISTRY_ORIGIN
 if [[ -n "$new_site" ]]; then
-  site_staging=$(mktemp -d "$(dirname "$new_site")/.luce-pkg-site-restore.XXXXXX")
-  cp -a "$backup/site/." "$site_staging/"
+  # Rebuilt beside its final name, then moved there whole.
+  site_staging="$(dirname "$new_site")/.luce-pkg-site-restore.$$"
+  site_cleanup() { rm -rf -- "$site_staging"; }
+  trap 'cleanup; site_cleanup' EXIT
+  "$admin" rebuild-site "$staging/registry.db" "$site_staging" >/dev/null
+  assets="$(dirname "$admin")/site-assets"
+  if [[ -d "$assets" ]]; then
+    mkdir "$site_staging/assets"
+    cp -a "$assets/." "$site_staging/assets/"
+  fi
   mv "$site_staging" "$new_site"
 fi
+unset LUCE_REGISTRY_STORE_TOKEN LUCE_REGISTRY_ORIGIN
 mv "$staging" "$destination"
 staging=
 trap - EXIT

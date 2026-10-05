@@ -4,9 +4,10 @@ from luce_auth import auth
 import c
 from luce_crypto import native as crypto
 from luce_db import db
+import interop
 import os
 import strings
-from luce_std import files
+from luce_std import files, paths
 import repositories
 import memory
 from luce_prism import prism
@@ -93,6 +94,16 @@ func migrate(source: str, target: str) -> i32!:
     print(f"migrated {summary.elements} elements, {summary.objects} objects ({summary.object_bytes} bytes), wrote {summary.written} object files, removed {summary.removed}")
     return 0
 
+## The database an operator command works on: through the running owner's socket for a
+## `.sock` path, else opened directly, which needs the registry stopped. Git objects
+## are found beside the database either way.
+func operate(path: str) -> interop.Reference[db.Database]!:
+    let online = strings.ends_with(path, ".sock")
+    var database_buffer: u8[1100]
+    let database_path = try strings.format(database_buffer, f"{(str)path.bytes[..<path.length - 5]}") if online else path
+    try repositories.use_objects(database_path)
+    return try db.Database.connect(path, try store_token()) if online else try db.Database.open(path, try store_token())
+
 ## Remove the package `owner/name`: its repository (record, refs, object listings and the
 ## object files no other repository lists) and everything the site holds for it (index
 ## line, release files, versions, package page, source browser), then the front pages.
@@ -113,12 +124,8 @@ func remove(path: str, coordinate: str, force: bool) -> i32!:
         if not force:
             print("refusing to remove it; pass --force to remove it anyway")
             return 1
-    let token = try store_token()
     let online = strings.ends_with(path, ".sock")
-    var database_buffer: u8[1100]
-    let database_path = try strings.format(database_buffer, f"{(str)path.bytes[..<path.length - 5]}") if online else path
-    try repositories.use_objects(database_path)
-    let database = try db.Database.connect(path, token) if online else try db.Database.open(path, token)
+    let database = try operate(path)
     defer database.release()
     var removed: repositories.Removal
     var in_database = true
@@ -142,8 +149,41 @@ func remove(path: str, coordinate: str, force: bool) -> i32!:
         print(f"removed from the site: {listed}, no package directory; front pages rewritten")
     return 0
 
+## Write the whole public site into `site` from the database alone (see
+## `repositories.rebuild_site`). Backups hold only the database, so a restore runs this;
+## so does pruning, after `withdraw`. `site` is new or an empty directory the operator
+## prepared with the site's owner, group and mode; one holding a site is refused.
+## Through `<database>.sock` it reads the running registry; a database path needs the
+## registry stopped. The site's stylesheets and scripts come from the release bundle.
+func rebuild_site(path: str, site: str) -> i32!:
+    try files.ensure_directory(site)
+    let index = try paths.join(site, "index")
+    defer index.release()
+    if files.exists((c.str)index.value): error(auth.invalid, "this directory already holds a site; rebuild into a new or empty one")
+    let database = try operate(path)
+    defer database.release()
+    let rebuilt = try repositories.rebuild_site(database.value(), site)
+    print(f"rebuilt {site}: {rebuilt.packages} packages, {rebuilt.releases} releases, {rebuilt.failed} failed")
+    return 1 if rebuilt.failed > 0 else 0
+
+## Withdraw releases of `owner/name`: their tags leave the database, so the next
+## `rebuild-site` leaves them out. The newest release always stays.
+func withdraw(path: str, coordinate: str, versions: str[]) -> i32!:
+    let (owner, name) = strings.split_once(coordinate, "/") else error(auth.invalid, "name the package as owner/name")
+    if not repositories.valid_name(name) or owner.length == 0: error(auth.invalid, "invalid package name")
+    let online = strings.ends_with(path, ".sock")
+    let database = try operate(path)
+    defer database.release()
+    for version in versions:
+        try repositories.withdraw(database.value(), owner, name, version)
+        print(f"withdrew {coordinate} {version}")
+    if not online: _ = try database.value().bake(wait_ms = 60000)
+    return 0
+
 pub func main(arguments: str[]) -> i32!:
     if arguments.length == 2 and arguments[1] == "token": return try generate_token()
+    if arguments.length == 4 and arguments[1] == "rebuild-site": return try rebuild_site(arguments[2], arguments[3])
+    if arguments.length >= 5 and arguments[1] == "withdraw": return try withdraw(arguments[2], arguments[3], arguments[4..])
     if arguments.length == 4 and arguments[1] == "migrate": return try migrate(arguments[2], arguments[3])
     if arguments.length == 4 and arguments[1] == "remove": return try remove(arguments[2], arguments[3], false)
     if arguments.length == 5 and arguments[1] == "remove" and arguments[4] == "--force": return try remove(arguments[2], arguments[3], true)
