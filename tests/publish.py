@@ -136,10 +136,34 @@ with tempfile.TemporaryDirectory(prefix='registry-publish-', dir='/tmp') as temp
             (consumer / 'package.prisma').write_text(manifest('consumer', 'tool', '    str entry = "src/main.lucb"\n'))
             (consumer / 'src/main.lucb').write_text('pub func main(arguments: str[]) -> i32:\n    return 0\n')
             added = run(['add', 'testadmin/greeter'], cwd=consumer).stdout
-            assert b'added dependency testadmin/greeter ^0.1.0' in added, added
+            assert b'added dependency testadmin/greeter (newest release, 0.1.0)' in added, added
+            written = (consumer / 'package.prisma').read_text()
+            dependency = written[written.index('def dependency "greeter"'):]
+            assert 'str version' not in dependency[:dependency.index('}')], written
             fetched = list(consumer.rglob('greeter.lucb'))
             assert fetched and fetched[0].read_text().endswith('return "hello"\n'), fetched
-            print('PASS another project finds the release and downloads it', flush=True)
+            print('PASS another project finds the release, adds it with no version and downloads it', flush=True)
+
+            # A package whose dependency names no version publishes, and its page says newest.
+            git(consumer, 'init', '-q', '-b', 'main', '--object-format=sha1')
+            (consumer / '.gitignore').write_text('.luc/\nbuild/\n')
+            git(consumer, 'add', '.')
+            git(consumer, 'commit', '-qm', 'consumer')
+            published = run(['publish', '-m', 'First release'], cwd=consumer).stdout
+            assert b'published testadmin/consumer 0.1.0' in published, published
+            page = (root / 'site/testadmin/consumer/index.html').read_text()
+            assert '<td>newest</td>' in page, page
+            print('PASS a dependency with no version publishes; its page says newest', flush=True)
+
+            # `name@requirement` holds a project back: the requirement is written as given.
+            held = root / 'held'
+            (held / 'src').mkdir(parents=True)
+            (held / 'package.prisma').write_text(manifest('held', 'tool', '    str entry = "src/main.lucb"\n'))
+            (held / 'src/main.lucb').write_text('pub func main(arguments: str[]) -> i32:\n    return 0\n')
+            added = run(['add', 'testadmin/greeter@^0.1.0'], cwd=held).stdout
+            assert b'added dependency testadmin/greeter ^0.1.0' in added, added
+            assert 'str version = "^0.1.0"' in (held / 'package.prisma').read_text()
+            print('PASS luc add name@^version writes that requirement', flush=True)
         finally:
             proxy.shutdown()
             stop(process)

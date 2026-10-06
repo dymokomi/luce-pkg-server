@@ -303,9 +303,13 @@ pub func package_page(out: Page*, definition: pkg.Definition*, versions: const u
             try out.escaped(item.owner)
             try out.put("/")
             try out.escaped(item.name)
-            try out.put("</a></td><td><code>")
-            try out.escaped(item.version)
-            try out.put("</code></td></tr>\n")
+            # no version is the newest release
+            if item.version.length == 0:
+                try out.put("</a></td><td>newest</td></tr>\n")
+            else:
+                try out.put("</a></td><td><code>")
+                try out.escaped(item.version)
+                try out.put("</code></td></tr>\n")
         try out.put("</tbody></table></div>\n")
     try out.put("<h2 id=\"versions\">Versions<a class=\"anchor\" href=\"#versions\" aria-label=\"link to this section\">#</a></h2>\n")
     # Newest last in the file; show newest first. Each release carries its notes.
