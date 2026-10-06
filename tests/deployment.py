@@ -37,7 +37,7 @@ for script in ('backup.sh', 'restore.sh'):
 subprocess.run(['bash', '-n', ROOT / 'deploy' / 'build-release.sh'], check=True)
 
 builder = (ROOT / 'deploy' / 'build-release.sh').read_text()
-for required in ('--native --release', 'SOURCE_COMMIT', 'DEPENDENCY_PINS',
+for required in ('--native --release', 'SOURCE_COMMIT', 'DEPENDENCIES',
                  'SHA256SUMS', 'git -C "$root" diff --quiet',
                  'release destination already exists'):
     assert required in builder

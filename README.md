@@ -37,14 +37,15 @@ package index for Luce and Luce Base, written in Luce Base. MIT OR Apache-2.0.
 | `deploy/` | systemd unit, Caddyfile, host limits, backup and restore, the release bundle builder |
 | `docs/CONTRACTS.md` | the decisions the design rests on |
 
-Dependencies are sibling checkouts pinned in `bootstrap/`: `luce-auth`, `luce-db`,
-`luce-prism`, `luce-git`, `luce-compress`, `luce-crypto`, `luce-tls`, `luce-server`,
-`luce-http-client`, `luce-json` and `luce-pkg`.
+Dependencies are sibling checkouts, at main in CI (`python3 ../luce-base/tools/checkout_main.py
+luce-pkg-server luce luce-luc` clones the missing ones): `luce-auth`, `luce-db`, `luce-prism`,
+`luce-git`, `luce-compress`, `luce-crypto`, `luce-tls`, `luce-server`, `luce-http-client`,
+`luce-json` and `luce-pkg`.
 
 ## Build and test
 
 ```sh
-python3 tools/bootstrap_registry.py      # builds the pinned compilers into build/toolchain
+python3 tools/bootstrap_registry.py      # builds the sibling compilers into build/toolchain
 python3 tests/run_registry.py            # accounts, Git, releases and the site, in every compiler mode
 python3 tests/run_repositories.py        # native storage fixtures; --fixture refs|graph|receive|large_objects
 python3 tests/deployment.py build/native0/admin

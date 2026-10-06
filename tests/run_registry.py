@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the loopback registry and run proxy/invite tests in every pinned mode."""
+"""Build the loopback registry and run proxy/invite tests in every compiler mode."""
 import argparse
 import os
 from pathlib import Path
@@ -18,7 +18,7 @@ def main():
     parser.add_argument("--base", type=Path, default=ROOT / "build/toolchain/luce-base")
     args = parser.parse_args()
     if not args.base.is_file():
-        raise SystemExit("Need a pinned luce-base at build/toolchain/luce-base")
+        raise SystemExit("Need luce-base at build/toolchain/luce-base (tools/bootstrap_registry.py)")
     environment = dict(os.environ, LUCE_BASE=str(args.base.resolve()))
     environment.setdefault("LUCE_STD", str(ROOT.parent / "luce-base/src/std"))
     environment.setdefault("LUCE_CACHE", str(ROOT / "build/cache"))
@@ -58,12 +58,8 @@ def main():
         run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/rebuild.py"), output / "registry", output / "admin", output / "account-fixture"], timeout=timeout)
         run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/migration.py"), output / "registry", output / "admin", output / "legacy-fixture"], timeout=timeout)
         if mode in PUBLISH_MODES:
-            # luc, at bootstrap/LUC beside this repository, publishing to this registry
+            # luc, checked out beside this repository, publishing to this registry
             luc = ROOT.parent / "luce-luc"
-            pinned = (ROOT / "bootstrap/LUC").read_text().strip()
-            found = subprocess.check_output(["git", "-C", str(luc), "rev-parse", "HEAD"], text=True).strip()
-            if found != pinned:
-                raise SystemExit(f"{luc}: expected {pinned}, found {found}")
             run([args.base.resolve(), "build", luc / "src/main.lucb", "--native", "-o", output / "luc"])
             run([os.environ.get("PYTHON", "python3"), str(ROOT / "tests/publish.py"), output / "registry", output / "account-fixture", output / "luc"], timeout=timeout * 2)
         print(f"PASS {mode}", flush=True)

@@ -34,7 +34,7 @@ parent=$(dirname "$destination")
 
 standard=${LUCE_STD:-"$root/../luce-base/src/std"}
 cache=${LUCE_CACHE:-"$root/build/cache"}
-[[ -d "$standard" ]] || { echo "LUCE_STD does not name the pinned standard library" >&2; exit 1; }
+[[ -d "$standard" ]] || { echo "LUCE_STD does not name Base's standard library" >&2; exit 1; }
 mkdir -p "$cache"
 
 staging=$(mktemp -d "$parent/.luce-pkg-release.XXXXXX")
@@ -58,20 +58,18 @@ install -m 0644 "$root"/deploy/host/* "$staging/host/"
 install -m 0644 "$root"/deploy/site-assets/* "$staging/site-assets/"
 printf '%s\n' "$source_commit" >"$staging/SOURCE_COMMIT"
 
-: >"$staging/DEPENDENCY_PINS"
-for pin in "$root"/bootstrap/*; do
-  name=$(basename "$pin")
-  [ "$name" = PACKAGES ] && continue
-  revision=$(tr -d '\n' <"$pin")
-  [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid dependency pin: $name" >&2; exit 1; }
-  printf '%s %s\n' "$name" "$revision" >>"$staging/DEPENDENCY_PINS"
-done
-# the library packages, one `name revision` line each
-while read -r name revision; do
-  [ -n "$name" ] || continue
-  [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || { echo "invalid package pin: $name" >&2; exit 1; }
-  printf '%s %s\n' "$name" "$revision" >>"$staging/DEPENDENCY_PINS"
-done <"$root/bootstrap/PACKAGES"
+# the revisions of luce-base and of every package checked out beside this one that the
+# build used (luce-base tools/checkout_main.py finds them), one `name revision` line each
+python3 - "$root" >"$staging/DEPENDENCIES" <<'PY'
+import subprocess, sys
+from pathlib import Path
+root = Path(sys.argv[1])
+sys.path.insert(0, str(root.parent / "luce-base/tools"))
+from checkout_main import check_out
+for directory in sorted(check_out([root]) | {root.parent / "luce-base"}):
+    revision = subprocess.check_output(["git", "-C", str(directory), "rev-parse", "HEAD"], text=True).strip()
+    print(directory.name, revision)
+PY
 
 (
   cd "$staging"

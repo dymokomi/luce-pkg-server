@@ -40,60 +40,21 @@ jobs:
       - uses: actions/checkout@v7
         with:
           path: luce-pkg-server
-      - name: Read dependency pins
-        id: pins
-        shell: bash
-        run: |
-          for pin in AUTH BASE COMPRESS CRYPTO DB GIT HTTP_CLIENT JSON LUC LUCE PKG PRISM SERVER TLS; do
-            key=$(printf '%s' "$pin" | tr '[:upper:]' '[:lower:]')
-            echo "$key=$(cat luce-pkg-server/bootstrap/$pin)" >> "$GITHUB_OUTPUT"
-          done
       - uses: actions/checkout@v7
-        with: {repository: dymokomi/luce-auth, ref: "${{ steps.pins.outputs.auth }}", path: luce-auth}
-      - uses: actions/checkout@v7
-        with: {repository: dymokomi/luce-base, ref: "${{ steps.pins.outputs.base }}", path: luce-base}
-      - name: Check out the pinned library packages
+        with: {repository: dymokomi/luce-base, path: luce-base}
+      # every dependency at main, beside this checkout (luce-base docs/CI.md)
+      - name: Check out dependencies at main
         shell: bash
         working-directory: ${{ github.workspace }}
         run: |
-          while read -r name revision; do
-            revision=${revision%$'\r'}
-            [ -n "$name" ] || continue
-            git init -q "$name"
-            git -C "$name" fetch -q --depth 1 "https://github.com/dymokomi/$name.git" "$revision"
-            git -C "$name" checkout -q --detach FETCH_HEAD
-          done < luce-pkg-server/bootstrap/PACKAGES
-      - uses: actions/checkout@v7
-        with: {repository: dymokomi/luce-compress, ref: "${{ steps.pins.outputs.compress }}", path: luce-compress}
-      - uses: actions/checkout@v7
-        with: {repository: dymokomi/luce-crypto, ref: "${{ steps.pins.outputs.crypto }}", path: luce-crypto}
-      - uses: actions/checkout@v7
-        with: {repository: dymokomi/luce-db, ref: "${{ steps.pins.outputs.db }}", path: luce-db}
-      - uses: actions/checkout@v7
-        with: {repository: dymokomi/luce-git, ref: "${{ steps.pins.outputs.git }}", path: luce-git}
-      - uses: actions/checkout@v7
-        with: {repository: dymokomi/luce-http-client, ref: "${{ steps.pins.outputs.http_client }}", path: luce-http-client}
-      - uses: actions/checkout@v7
-        with: {repository: dymokomi/luce-json, ref: "${{ steps.pins.outputs.json }}", path: luce-json}
-      - uses: actions/checkout@v7
-        with: {repository: dymokomi/luce, ref: "${{ steps.pins.outputs.luce }}", path: luce}
-      - uses: actions/checkout@v7
-        with: {repository: dymokomi/luce-luc, ref: "${{ steps.pins.outputs.luc }}", path: luce-luc}
-      - uses: actions/checkout@v7
-        with: {repository: dymokomi/luce-pkg, ref: "${{ steps.pins.outputs.pkg }}", path: luce-pkg}
-      - uses: actions/checkout@v7
-        with: {repository: dymokomi/luce-prism, ref: "${{ steps.pins.outputs.prism }}", path: luce-prism}
-      - uses: actions/checkout@v7
-        with: {repository: dymokomi/luce-server, ref: "${{ steps.pins.outputs.server }}", path: luce-server}
-      - uses: actions/checkout@v7
-        with: {repository: dymokomi/luce-tls, ref: "${{ steps.pins.outputs.tls }}", path: luce-tls}
+          python3 luce-base/tools/checkout_main.py luce-pkg-server luce luce-luc
       - name: Select Clang
         shell: bash
         run: |
           mkdir -p "$RUNNER_TEMP/luce-bin"
           ln -s "$(command -v clang)" "$RUNNER_TEMP/luce-bin/cc"
           echo "$RUNNER_TEMP/luce-bin" >> "$GITHUB_PATH"
-      - name: Build pinned toolchain
+      - name: Build the toolchain
         working-directory: luce-pkg-server
         run: python3 tools/bootstrap_registry.py
       - name: Static contracts

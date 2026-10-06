@@ -19,28 +19,13 @@ jobs:
       - uses: actions/checkout@v4
         with:
           path: luce-pkg-server
-      - name: Check out exact registry dependencies
-        working-directory: luce-pkg-server
+      # every dependency at main, beside this checkout (luce-base docs/CI.md)
+      - name: Check out dependencies at main
         shell: bash
+        working-directory: ${{ github.workspace }}
         run: |
-          for entry in BASE:luce-base LUCE:luce SERVER:luce-server DB:luce-db AUTH:luce-auth CRYPTO:luce-crypto PRISM:luce-prism TLS:luce-tls JSON:luce-json GIT:luce-git COMPRESS:luce-compress HTTP_CLIENT:luce-http-client PKG:luce-pkg LUC:luce-luc; do
-            pin="${entry%%:*}"
-            repo="${entry#*:}"
-            revision=$(cat "bootstrap/$pin")
-            [[ "$revision" =~ ^[0-9a-f]{40}$ ]] || exit 1
-            git init "../$repo"
-            git -C "../$repo" remote add origin "https://github.com/dymokomi/$repo.git"
-            git -C "../$repo" fetch --depth 1 origin "$revision"
-            git -C "../$repo" checkout --detach FETCH_HEAD
-          done
-          # the library packages the compiler and these sources depend on
-          while read -r name revision; do
-            revision=${revision%$'\r'}
-            [ -n "$name" ] || continue
-            git init -q "../$name"
-            git -C "../$name" fetch -q --depth 1 "https://github.com/dymokomi/$name.git" "$revision"
-            git -C "../$name" checkout -q --detach FETCH_HEAD
-          done < bootstrap/PACKAGES
+          git clone -q --depth 1 https://github.com/dymokomi/luce-base.git
+          python3 luce-base/tools/checkout_main.py luce-pkg-server luce luce-luc
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'

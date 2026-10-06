@@ -13,8 +13,8 @@ login shell or home directory. Do not build as that user.
 
 The public Linux CI produces a no-clobber, commit-stamped deployment artifact with
 `deploy/build-release.sh`. It builds natively on x86-64 Linux from an exact clean
-Git commit and the checked-in dependency pins. The bundle contains the registry
-and admin executables, deployment assets, `SOURCE_COMMIT`, `DEPENDENCY_PINS` and
+Git commit and the dependency checkouts beside it (main in CI). The bundle contains the registry
+and admin executables, deployment assets, `SOURCE_COMMIT`, `DEPENDENCIES` (the revision of every dependency checkout it was built from) and
 `SHA256SUMS`. Verify every checksum and both commit records before installing;
 never substitute an untracked local binary or build directly as the service user.
 
