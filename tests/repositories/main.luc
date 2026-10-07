@@ -1,0 +1,50 @@
+# Native repository storage: each fixture under drivers/ runs its phases as separate
+# processes over the same store (write, then read it back; IPC; concurrent races; storage
+# limits, injected faults and an interrupted staging resumed), so a phase sees only what
+# an earlier process left on disk. The drivers build optimised, as the old gate did, since
+# the storage limits move tens of megabytes. `luc test` runs this with LUCE_BASE naming the compiler.
+from luce_std import files, paths, process
+import platform
+
+let failed = ErrorCode.package(1)
+
+pub func main(arguments: list[str]) -> int!:
+    let top = process.current_directory()
+    let here = process.variable("LUC_TEST_DIR") else error(failed, "LUC_TEST_DIR names no test directory")
+    let base = process.variable("LUCE_BASE") else "luce-base"
+    let build = paths.join(top, "build/tests/repositories")
+    let binaries = paths.join(build, "drivers")
+    files.ensure_directory(binaries)
+    # the IPC phase puts a Unix socket beside the store, whose path holds about a hundred
+    # bytes: stay under /tmp, as the old runner did
+    with files.TemporaryDirectory("" if platform.windows else "/tmp") as directory:
+        run_fixtures(base, here, top, binaries, directory.path())
+    return 0
+
+func run_fixtures(base: str, here: str, top: str, binaries: str, scratch: str) -> unit!:
+    let bootstrap = paths.join(paths.directory(top), "luce-base/bootstrap/luce-base-arm64-macos.c")
+    for fixture in ["repositories", "refs", "large_objects", "graph", "receive"]:
+        let binary = paths.join(binaries, fixture)
+        let built = process.run(base, ["build", paths.join(here, f"drivers/{fixture}.lucb"), "--native", "--opt", "3", "-o", binary], here)
+        if built.exit_code != 0:
+            error(failed, f"build {fixture}: {built.output}{built.error_output}")
+        let stores = paths.join(scratch, fixture)
+        files.ensure_directory(stores)
+        var phases = [["data", "write"], ["data", "read"], ["ipc", "ipc"], ["ipc", "read"]]
+        if fixture == "large_objects":
+            phases.append(["faults", "faults"])
+            phases.append(["interrupted", "stage"])
+            phases.append(["interrupted", "resume"])
+        elif fixture != "graph" and fixture != "receive":
+            for attempt in 0..<4:
+                phases.append([f"race-{attempt}", "race"])
+        if fixture == "refs" or fixture == "large_objects":
+            phases.append(["limits", "limits"])
+        for phase in phases:
+            var words = [paths.join(stores, phase[0]), phase[1]]
+            if fixture == "large_objects":
+                words.append(bootstrap)
+            let ran = process.run(binary, words, top)
+            if ran.exit_code != 0:
+                error(failed, f"{fixture} {phase[1]}: exit status {ran.exit_code}\n{ran.output}{ran.error_output}")
+        print(f"PASS repository fixture {fixture}")

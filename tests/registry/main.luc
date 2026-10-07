@@ -1,0 +1,43 @@
+# The registry server and its admin tool, built from src/, driven by independent Python
+# clients: accounts and Git over HTTP (check_accounts.py), the admin commands (admin.py),
+# the deployment scripts (deployment.py), storage, removal, the site rebuilt from the
+# database, migration of a legacy store, and a release published by luc built from the
+# luce-luc checkout beside this one (publish.py). The fixtures under drivers/ seed the
+# stores. They build optimised, as the old gate did: publish.py moves a 72 MiB release.
+# `luc test` runs this with LUCE_BASE naming the compiler.
+from luce_std import files, paths, process
+
+let failed = ErrorCode.package(1)
+
+func build(base: str, source: str, output: str, here: str) -> unit!:
+    let built = process.run(base, ["build", source, "--native", "--opt", "3", "-o", output], here)
+    if built.exit_code != 0:
+        error(failed, f"build {source}: {built.output}{built.error_output}")
+
+pub func main(arguments: list[str]) -> int!:
+    let top = process.current_directory()
+    let here = process.variable("LUC_TEST_DIR") else error(failed, "LUC_TEST_DIR names no test directory")
+    let base = process.variable("LUCE_BASE") else "luce-base"
+    let binaries = paths.join(top, "build/tests/registry/programs")
+    files.ensure_directory(binaries)
+    let registry = paths.join(binaries, "registry")
+    let admin = paths.join(binaries, "admin")
+    let account = paths.join(binaries, "account-fixture")
+    let legacy = paths.join(binaries, "legacy-fixture")
+    let luc = paths.join(binaries, "luc")
+    build(base, paths.join(top, "src/registry.lucb"), registry, here)
+    build(base, paths.join(top, "src/admin.lucb"), admin, here)
+    build(base, paths.join(here, "drivers/account_fixture.lucb"), account, here)
+    build(base, paths.join(here, "drivers/legacy_fixture.lucb"), legacy, here)
+    build(base, paths.join(paths.directory(top), "luce-luc/src/main.lucb"), luc, here)
+    let checks = [["check_accounts.py", registry, account], ["admin.py", admin, registry],
+        ["deployment.py", admin], ["storage.py", registry, admin, account],
+        ["remove.py", registry, admin, account], ["rebuild.py", registry, admin, account],
+        ["migration.py", registry, admin, legacy], ["publish.py", registry, account, luc]]
+    for words in checks:
+        let ran = process.run("python3", words, here)
+        if ran.output != "":
+            print(ran.output.trim_end())
+        if ran.exit_code != 0:
+            error(failed, f"{words[0]}: exit status {ran.exit_code}\n{ran.error_output}")
+    return 0

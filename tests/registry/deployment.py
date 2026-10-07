@@ -6,7 +6,7 @@ import subprocess
 import sys
 import tempfile
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve().parents[2]
 admin = Path(sys.argv[1]).resolve()
 service = (ROOT / 'deploy/luce-pkg-server.service').read_text()
 caddy = (ROOT / 'deploy/Caddyfile').read_text()

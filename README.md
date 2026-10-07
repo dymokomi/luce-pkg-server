@@ -45,13 +45,16 @@ luce-pkg-server luce luce-luc` clones the missing ones): `luce-auth`, `luce-db`,
 ## Build and test
 
 ```sh
-python3 tools/bootstrap_registry.py      # builds the sibling compilers into build/toolchain
-python3 tests/run_registry.py            # accounts, Git, releases and the site, in every compiler mode
-python3 tests/run_repositories.py        # native storage fixtures; --fixture refs|graph|receive|large_objects
-python3 tests/deployment.py build/native0/admin
+luc test
 ```
 
-Add `--mode native0` to either runner for one fast pass.
+`tests/http_auth` and `tests/rate_limit` check those modules on their own.
+`tests/registry` builds the registry, the admin tool, the fixtures in
+`tests/registry/drivers/` and luc from the luce-luc checkout beside this one, and drives
+them with the Python clients beside it: accounts and Git, admin, deployment scripts,
+storage, removal, the rebuilt site, migration, and a published release (about five
+minutes, most of it the 72 MiB release). `tests/repositories` runs the native storage
+fixtures (repositories, refs, large objects, graph, receive) phase by phase.
 
 ## Deploying
 
