@@ -38,6 +38,8 @@ cache=${LUCE_CACHE:-"$root/build/cache"}
 mkdir -p "$cache"
 
 staging=$(mktemp -d "$parent/.luce-pkg-release.XXXXXX")
+# mktemp makes it 0700; the release directory must be readable by the service user
+chmod 0755 "$staging"
 cleanup() { [[ -z "${staging:-}" ]] || rm -rf -- "$staging"; }
 trap cleanup EXIT
 
