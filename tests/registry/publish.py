@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""luc against this registry, end to end: `luc login`, `luc publish` of a history too
-large for one push (luc pushes it a commit at a time), then `luc latest` and `luc add`
-from another project, which downloads and checks the release pack."""
+"""luc against this registry, end to end: `luc login`, `luc publish`, which sends one
+snapshot of HEAD without its history or development paths and only once HEAD is on its
+origin (GitHub in production), then `luc latest` and `luc add` from another project, which
+downloads and checks the release pack."""
 import http.client
 import http.server
 import os
@@ -105,30 +106,64 @@ with tempfile.TemporaryDirectory(prefix='registry-publish-', dir='/tmp') as temp
         return result
 
     def git(work, *args):
-        subprocess.run(['git', '-C', str(work), *args], env=client, check=True, capture_output=True, timeout=600)
+        return subprocess.run(['git', '-C', str(work), *args], env=client, check=True, capture_output=True,
+                              timeout=600).stdout.decode()
+
+    def with_origin(work, name):
+        """A bare repository standing in for the package's GitHub repository."""
+        origin = root / f'{name}-origin.git'
+        subprocess.run(['git', 'init', '-q', '--bare', '-b', 'main', str(origin)], env=client, check=True)
+        git(work, 'remote', 'add', 'origin', str(origin))
 
     with (root / 'registry.log').open('w+') as log:
         process = start(registry, database, port, environment, log)
         try:
             assert b'Logged in as testadmin' in run(['login', 'testadmin'], stdin=PASSWORD + b'\n').stdout
 
-            # Three commits of 24 MiB that does not compress: more than one push may carry.
+            # Three commits of 24 MiB that does not compress, more than one push may carry,
+            # with tests and dev material beside the sources: only HEAD's sources go up.
             work = root / 'greeter'
             (work / 'src').mkdir(parents=True)
+            (work / 'tests').mkdir()
+            (work / 'dev').mkdir()
             (work / 'package.prisma').write_text(manifest('greeter'))
             (work / 'src/greeter.lucb').write_text('## Greets.\npub func greeting() -> str:\n    return "hello"\n')
+            (work / 'tests/check.lucb').write_text('test "greets":\n    pass\n')
+            (work / 'dev/notes.txt').write_text('development notes\n')
             git(work, 'init', '-q', '-b', 'main', '--object-format=sha1')
             for index in range(3):
                 (work / 'data.bin').write_bytes(os.urandom(24 * 1048576))
                 git(work, 'add', '.')
                 git(work, 'commit', '-qm', f'step {index}')
+            with_origin(work, 'greeter')
+            # GitHub keeps the history, so what is not there yet is not released.
+            refused = run(['publish', '-m', 'First release'], cwd=work, success=False).stderr
+            assert b'not on GitHub yet' in refused, refused
+            git(work, 'push', '-q', 'origin', 'main')
+            head = git(work, 'rev-parse', 'HEAD').strip()
             published = run(['publish', '-m', 'First release'], cwd=work).stdout
             assert b'published testadmin/greeter 0.1.0' in published, published
-            assert (root / 'site/testadmin/greeter/0.1.0.pack').is_file()
-            print('PASS luc publish releases a history larger than one push', flush=True)
+            pack = root / 'site/testadmin/greeter/0.1.0.pack'
+            assert pack.is_file()
+            # The listing names the release commit, which the pack holds, then HEAD.
+            version, _, commit, source = (root / 'site/testadmin/greeter/versions').read_text().split()
+            assert version == '0.1.0' and source == head and commit != head
+            unpacked = root / 'unpacked'
+            subprocess.run(['git', 'init', '-q', '--bare', str(unpacked)], env=client, check=True)
+            subprocess.run(['git', '-C', str(unpacked), 'index-pack', '--stdin'], input=pack.read_bytes(),
+                           env=client, check=True, capture_output=True)
+            files = git(unpacked, 'ls-tree', '-r', '--name-only', commit).split()
+            assert sorted(files) == ['data.bin', 'package.prisma', 'src/greeter.lucb'], files
+            assert 'parent ' not in git(unpacked, 'cat-file', 'commit', commit)
+            assert f'Source-Commit: {head}' in git(unpacked, 'cat-file', 'commit', commit)
+            # No branch on the registry, and no tag left behind here.
+            advertised = git(work, 'ls-remote', 'pkg')
+            assert 'refs/heads/' not in advertised and 'refs/tags/v0.1.0' in advertised, advertised
+            assert git(work, 'tag', '-l') == ''
+            print('PASS luc publish sends one snapshot of HEAD: no history, tests or dev; HEAD named as its source', flush=True)
 
-            # The same version again is refused before anything is pushed.
-            assert b'already tagged' in run(['publish', '-m', 'Again'], cwd=work, success=False).stderr
+            # The same version again is refused by the registry: a release never moves.
+            assert b'refused the release' in run(['publish', '-m', 'Again'], cwd=work, success=False).stderr
 
             assert run(['latest', 'testadmin/greeter']).stdout.strip() == b'0.1.0'
             consumer = root / 'consumer'
@@ -149,6 +184,8 @@ with tempfile.TemporaryDirectory(prefix='registry-publish-', dir='/tmp') as temp
             (consumer / '.gitignore').write_text('.luc/\nbuild/\n')
             git(consumer, 'add', '.')
             git(consumer, 'commit', '-qm', 'consumer')
+            with_origin(consumer, 'consumer')
+            git(consumer, 'push', '-q', 'origin', 'main')
             published = run(['publish', '-m', 'First release'], cwd=consumer).stdout
             assert b'published testadmin/consumer 0.1.0' in published, published
             page = (root / 'site/testadmin/consumer/index.html').read_text()

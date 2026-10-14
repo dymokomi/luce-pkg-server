@@ -357,6 +357,10 @@ let max_graph_edges: usize = 1048576
 
 pub struct TagRelease:
     pub var commit: u8[40]
+    ## The commit the release was made from, when its commit names one (`Source-Commit:`):
+    ## `luc publish` sends a snapshot without history, made from a commit on GitHub.
+    pub var source: u8[40]
+    pub var has_source: bool
     pub var pack_size: usize
     pub var definition_size: usize
     pub var readme_size: usize
@@ -399,6 +403,24 @@ func tree_file(session: prism.Session*, path: str, tree: const u8[], file: str, 
     for i in 0..<blob.payload.length: output[i] = blob.payload[i]
     return blob.payload.length
 
+## A `Source-Commit: <40 hex digits>` line of a commit message, copied into `source`.
+func source_commit(message: const u8[], source: u8[40]*) -> bool:
+    let key = "Source-Commit: "
+    var start: usize = 0
+    for end in 0..<message.length + 1:
+        if end != message.length and message[end] != '\n': continue
+        let line = (str)message[start..<end]
+        start = end + 1
+        if line.length != key.length + 40 or not strings.starts_with(line, key): continue
+        var valid = true
+        for i in 0..<(usize)40:
+            let digit = line.bytes[key.length + i]
+            if not ((digit >= '0' and digit <= '9') or (digit >= 'a' and digit <= 'f')): valid = false
+        if not valid: continue
+        for i in 0..<(usize)40: (*source)[i] = line.bytes[key.length + i]
+        return true
+    return false
+
 func tag_release(database: db.Database*, owner: str, name: str, target: const u8[], version: str,
                  pack: u8[], definition: u8[], readme: u8[], notes: u8[]) -> TagRelease!:
     var path_buffer: u8[192]
@@ -440,6 +462,7 @@ func tag_release(database: db.Database*, owner: str, name: str, target: const u8
     try git.decode_id(commit.tree, tree_id)
 
     _ = try git.hex_id(commit_id, result.commit)
+    result.has_source = source_commit(commit.message, &result.source)
     for i in 0..<(usize)20: result.tree[i] = tree_id[i]
     let root_value = try checked_object(session, path, tree_id)
     defer root_value.release()
@@ -568,7 +591,9 @@ pub func regenerate_site(database: db.Database*, site_root: str) -> !:
             let entry = (str)versions.value[line_start..<line_end]
             line_start = line_end + 1
             let (version, rest) = strings.split_once(entry, " ") else continue
-            let (_, commit_text) = strings.split_once(rest, " ") else continue
+            let (_, after_digest) = strings.split_once(rest, " ") else continue
+            # the commit, then the source commit when there is one
+            let (commit_text, _) = strings.split_once(after_digest, " ") else (after_digest, "")
             regenerate_release(database, site_root, owner, name, version, strings.trim(commit_text), version == latest) catch:
                 recover ()
 
@@ -685,7 +710,8 @@ func rebuild_release(database: db.Database*, site_root: str, owner: str, name: s
     let built = try tag_release(database, owner, name, target, version, pack, definition, readme, notes)
     try site.publish_files(site_root, owner, name, version, pack[..<built.pack_size], definition[..<built.definition_size], notes[..<built.notes_size])
     try site.publish_listing(site_root, owner, name, version, pack[..<built.pack_size],
-                             (str)built.commit[0..], definition[..<built.definition_size], readme[..<built.readme_size])
+                             (str)built.commit[0..], definition[..<built.definition_size], readme[..<built.readme_size],
+                                 (str)built.source[0..] if built.has_source else "")
     # As at push time, the source browser never fails a release.
     publish_source(database, site_root, owner, name, version, built.tree) catch:
         recover ()
@@ -829,7 +855,8 @@ pub func receive_pack(database: db.Database*, principal: str, owner: str, name: 
         if version.length == 0: continue
         let built = try tag_release(database, owner, name, updates[i].target, version, pack, definition, readme, notes)
         try site.publish_listing(site_root, owner, name, version, pack[..<built.pack_size],
-                                 (str)built.commit[0..], definition[..<built.definition_size], readme[..<built.readme_size])
+                                 (str)built.commit[0..], definition[..<built.definition_size], readme[..<built.readme_size],
+                                 (str)built.source[0..] if built.has_source else "")
         # The source browser is a convenience: a failure there never fails a release.
         publish_source(database, site_root, owner, name, version, built.tree) catch:
             recover ()
@@ -1031,6 +1058,9 @@ struct Graph:
     var count: usize
     var edges: usize
     var probes: usize
+    ## Whether a commit's parents are followed: false for what a release alone reaches
+    ## (`trim`), which keeps history out.
+    var history: bool = true
 
     func contains(id: const u8[]) -> bool!:
         var bucket: usize = 0
@@ -1147,7 +1177,7 @@ struct Graph:
             elif actual == 3:
                 let commit = try git.decode_commit(object.payload)
                 try self.add_hex(commit.tree, 2)
-                for i in 0..<commit.parent_count:
+                for i in 0..<(commit.parent_count if self.history else 0):
                     var parent: u8[20]
                     try git.decode_id(try commit.parent(i), parent)
                     try self.add_parent(parent)
@@ -1529,7 +1559,7 @@ pub func trim(database: db.Database*, owner: str, name: str) -> Trimmed!:
         let slots = try new usize[graph_slots] --- in memory.heap
         defer free(slots) in memory.heap
         for i in 0..<slots.length: slots[i] = 0
-        var graph = Graph(nodes = nodes, slots = slots)
+        var graph = Graph(nodes = nodes, slots = slots, history = false)
         if try session.contains(refs_root):
             let refs = try session.children(refs_root)
             defer refs.release()

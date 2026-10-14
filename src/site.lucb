@@ -1,6 +1,8 @@
 ## Static public registry files, served directly by the HTTPS proxy:
 ##   <site>/index                         one line per package: owner/name TAB latest TAB description
-##   <site>/<owner>/<name>/versions       one line per release: version SP sha256 SP commit
+##   <site>/<owner>/<name>/versions       one line per release: version SP sha256 SP commit, then
+##                                        SP source when the release commit names the commit
+##                                        it was made from (`Source-Commit:`, on GitHub)
 ##   <site>/<owner>/<name>/<version>.pack     Git pack of the tagged commit and its tree
 ##   <site>/<owner>/<name>/<version>.prisma   that commit's package.prisma
 ## Release files are immutable. Everything here is derived from repository state.
@@ -174,7 +176,7 @@ struct Text:
 
 ## Step two, after the tag ref is committed: make the release discoverable.
 pub func publish_listing(site: str, owner: str, name: str, version: str, pack: const u8[], commit: str,
-                         definition: const u8[], readme: const u8[]) -> !:
+                         definition: const u8[], readme: const u8[], source: str = "") -> !:
     var declared = try pkg.decode_package(definition)
     defer declared.close()
     let description = declared.description
@@ -223,6 +225,9 @@ pub func publish_listing(site: str, owner: str, name: str, version: str, pack: c
         try output.put((str)digest_text[0..])
         try output.put(" ")
         try output.put(commit)
+        if source.length > 0:
+            try output.put(" ")
+            try output.put(source)
         try output.put("\n")
         try files.write_atomic((c.str)versions_path.value, buffer[..<output.used], synchronize = true)
 
