@@ -40,7 +40,7 @@ GitHub keeps the history. MIT OR Apache-2.0.
 
 Dependencies are sibling checkouts, at main in CI (`python3 ../luce-base/tools/checkout_main.py
 luce-pkg-server luce luce-luc` clones the missing ones): `luce-auth`, `luce-db`, `luce-prism`,
-`luce-git`, `luce-compress`, `luce-crypto`, `luce-tls`, `luce-server`, `luce-http-client`,
+`luce-git`, `luce-crypto`, `luce-tls`, `luce-server`, `luce-http-client`,
 `luce-json` and `luce-pkg`.
 
 ## Build and test
