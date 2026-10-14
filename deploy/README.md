@@ -144,6 +144,28 @@ sudo install -m 0644 deploy/host/luce-pkg-checkpoint.service deploy/host/luce-pk
 sudo systemctl daemon-reload && sudo systemctl enable --now luce-pkg-checkpoint.timer
 ```
 
+## Releases, not history
+
+The registry is for installing and updating; GitHub keeps every package's history.
+`luc publish` sends one snapshot per release: HEAD's files without the development paths
+(`tests`, `dev`, and those package.prisma declares), as a parentless commit whose message
+names HEAD (`Source-Commit:`), under the release tag alone, with no branch. The `versions`
+listing then reads `version sha256 commit source`: the commit the release pack holds, then
+the GitHub commit it was made from. A walk stops at a parent the repository does not hold.
+
+A repository pushed the older way, branches and history included, is reduced to its
+releases offline; `--all` takes every package in the site's index:
+
+```sh
+sudo systemctl stop luce-pkg-checkpoint.timer luce-pkg-server
+sudo /usr/local/sbin/luce-pkg-admin-run trim /var/lib/luce-pkg-server/registry.db --all
+sudo systemctl start luce-pkg-server luce-pkg-checkpoint.timer
+```
+
+Every ref but the release tags goes, and so does every object no release reaches through
+its tag, commit and tree; an object file goes when no repository lists it any more. Release
+files and listings are untouched, since each was built from exactly what stays.
+
 ## Removing a package
 
 Nothing is deleted by a push. An operator removes a package through the running
