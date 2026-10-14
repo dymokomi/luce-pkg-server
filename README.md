@@ -1,7 +1,8 @@
 # luce-pkg-server
 
-The registry behind [pkg.luciaos.com](https://pkg.luciaos.com): a Git host and
-package index for Luce and Luce Base, written in Luce Base. MIT OR Apache-2.0.
+The registry behind [pkg.luciaos.com](https://pkg.luciaos.com): the package index
+for Luce and Luce Base, written in Luce Base. Users install and update from it;
+GitHub keeps the history. MIT OR Apache-2.0.
 
 ## What it does
 
@@ -13,10 +14,11 @@ package index for Luce and Luce Base, written in Luce Base. MIT OR Apache-2.0.
   package with its README, dependencies and versions, and browsable, highlighted
   source for every release. Caddy serves all of that as static files; the registry
   is not on the path of a download.
-- **Git hosting.** Native Git Smart HTTP, refs and object listings in Prism, object
-  bytes in content-addressed files: anonymous clone and
-  fetch, authenticated push with atomic ref updates; a push never moves or deletes a
-  release tag, an operator can withdraw one.
+- **Release tags by push.** Native Git Smart HTTP receive-pack, refs and object
+  listings in Prism, object bytes in content-addressed files. An authenticated push
+  may only create release tags: branches, other tags, moves and deletions are refused,
+  with the reason. Nothing is served to clone or fetch; an operator can withdraw a
+  release.
 - **Accounts.** Invitation-only registration, password login, sessions that last
   until revoked, and short-lived repository credentials for Git. Registration can
   be closed once the intended accounts exist.
@@ -28,8 +30,7 @@ package index for Luce and Luce Base, written in Luce Base. MIT OR Apache-2.0.
 | Path | What |
 | --- | --- |
 | `src/registry.lucb` | HTTP routes and the process |
-| `src/repositories.lucb` | repositories, objects, refs, Smart HTTP, tag releases |
-| `src/gzip.lucb` | gzip request bodies, which stock Git sends for large fetch requests |
+| `src/repositories.lucb` | repositories, objects, release tags, receive-pack, tag releases |
 | `src/objects.lucb` | the content-addressed object files beside the database |
 | `src/migrate.lucb` | `luce-pkg-admin migrate`: objects out of the database, once |
 | `src/site.lucb`, `pages.lucb` | the static site: listings, pages, source browser |

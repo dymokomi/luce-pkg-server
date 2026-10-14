@@ -32,10 +32,10 @@ func seed(database: db.Database*, name: str) -> !:
     try repositories.put_object(database, "alice", "alice", name, wire[..<n], result)
     n = try git.encode_object("blob", b"fixture blob", wire)
     try repositories.put_object(database, "alice", "alice", name, wire[..<n], result)
-    # Ensure the ref directory already exists; prefix race must conflict on the
-    # serialization guard, not incidentally on creation of the shared directory.
+    # Ensure the ref directory already exists; a race must conflict on the serialization
+    # guard, not incidentally on creation of the shared directory.
     try repositories.update_refs(database, "alice", "alice", name,
-                                 [repositories.RefUpdate(name = "refs/tags/seed", expected = zero, target = blob_id)])
+                                 [repositories.RefUpdate(name = "refs/tags/v0.0.1", expected = zero, target = blob_id)])
 
 func change(name: str, expected: const u8[], target: const u8[]) -> repositories.RefUpdate:
     return repositories.RefUpdate(name = name, expected = expected, target = target)
@@ -62,63 +62,55 @@ func rejected(database: db.Database*, updates: const repositories.RefUpdate[], e
 
 func write(database: db.Database*) -> !:
     try seed(database, "demo")
-    try repositories.update_refs(database, "alice", "alice", "demo", [change("refs/heads/main", zero, first_id), change("refs/tags/v1", zero, blob_id)])
-    try rejected(database, [change("refs/heads/main", zero, second_id)], prism.conflict)
+    try repositories.update_refs(database, "alice", "alice", "demo", [change("refs/tags/v1.0.0", zero, first_id), change("refs/tags/v1.1.0", zero, blob_id)])
+    try rejected(database, [change("refs/tags/v1.0.0", zero, second_id)], prism.conflict)
     # Validate the entire batch before publishing any updates.
-    try rejected(database, [change("refs/heads/main", first_id, second_id), change("refs/tags/v1", first_id, second_id)], prism.conflict)
-    try expect(database, "demo", "refs/heads/main", first_id)
-    try expect(database, "demo", "refs/tags/v1", blob_id)
-    try repositories.update_refs(database, "alice", "alice", "demo", [change("refs/heads/main", first_id, second_id)])
-    try rejected(database, [change("refs/heads/main", first_id, zero)], prism.conflict)
-    try rejected(database, [change("refs/heads/main/child", zero, first_id)], prism.conflict)
-    try repositories.update_refs(database, "alice", "alice", "demo", [change("refs/heads/main", second_id, zero), change("refs/heads/main/child", zero, first_id)])
-    try absent(database, "demo", "refs/heads/main")
-    try expect(database, "demo", "refs/heads/main/child", first_id)
-    try rejected(database, [change("refs/heads/main", zero, first_id)], prism.conflict)
-    try repositories.update_refs(database, "alice", "alice", "demo", [change("refs/heads/main/child", first_id, zero), change("refs/heads/main", zero, second_id)])
-    for name in ["HEAD", "refs/replace/id", "refs/remotes/main", "refs/heads/../x", "refs/heads/a.lock", "refs/heads/a\0b"]:
+    try rejected(database, [change("refs/tags/v1.0.0", first_id, second_id), change("refs/tags/v1.1.0", first_id, second_id)], prism.conflict)
+    try expect(database, "demo", "refs/tags/v1.0.0", first_id)
+    try expect(database, "demo", "refs/tags/v1.1.0", blob_id)
+    # The store compares and swaps any change; a push may only create (see receive_pack),
+    # and only `withdraw` deletes.
+    try repositories.update_refs(database, "alice", "alice", "demo", [change("refs/tags/v1.0.0", first_id, second_id)])
+    try rejected(database, [change("refs/tags/v1.0.0", first_id, zero)], prism.conflict)
+    try repositories.update_refs(database, "alice", "alice", "demo", [change("refs/tags/v1.0.0", second_id, zero)])
+    try absent(database, "demo", "refs/tags/v1.0.0")
+    try rejected(database, [change("refs/tags/v1.0.0", second_id, zero)], prism.conflict)
+    try repositories.update_refs(database, "alice", "alice", "demo", [change("refs/tags/v1.0.0", zero, second_id)])
+    # Release tags only: no branch, no other tag, nothing outside refs/tags/v<major.minor.patch>.
+    for name in ["HEAD", "refs/heads/main", "refs/remotes/main", "refs/tags/ordinary", "refs/tags/v1", "refs/tags/v1.0",
+                 "refs/tags/v1.0.0/x", "refs/tags/v1.0.0.lock", "refs/tags/v1.0.0\0b", "refs/tags/../v1.0.0"]:
         try rejected(database, [change(name, zero, first_id)], prism.invalid)
-    try rejected(database, [change("refs/heads/blob", zero, blob_id)], prism.invalid)
-    try rejected(database, [change("refs/heads/empty", zero, zero)], prism.invalid)
-    try rejected(database, [change("refs/tags/x", zero, first_id), change("refs/tags/x/y", zero, first_id)], prism.conflict)
-    try rejected(database, [change("refs/tags/x", zero, first_id), change("refs/tags/x", zero, first_id)], prism.invalid)
+    try rejected(database, [change("refs/tags/v3.0.0", zero, zero)], prism.invalid)
+    try rejected(database, [change("refs/tags/v3.0.0", zero, first_id), change("refs/tags/v3.0.0", zero, first_id)], prism.invalid)
     var missing: u8[20]
     for i in 0..<(usize)20: missing[i] = 0x77
-    try rejected(database, [change("refs/heads/main", second_id, first_id), change("refs/tags/missing", zero, missing)], prism.missing)
-    try expect(database, "demo", "refs/heads/main", second_id)
-    try absent(database, "demo", "refs/tags/missing")
+    try rejected(database, [change("refs/tags/v1.0.0", second_id, first_id), change("refs/tags/v3.0.1", zero, missing)], prism.missing)
+    try expect(database, "demo", "refs/tags/v1.0.0", second_id)
+    try absent(database, "demo", "refs/tags/v3.0.1")
     var empty: repositories.RefUpdate[]
     try rejected(database, empty, prism.invalid)
     var short_id: u8[19]
-    try rejected(database, [change("refs/tags/short", short_id, first_id)], prism.invalid)
-    try rejected(database, [change("refs/tags/short", zero, short_id)], prism.invalid)
+    try rejected(database, [change("refs/tags/v3.0.2", short_id, first_id)], prism.invalid)
+    try rejected(database, [change("refs/tags/v3.0.2", zero, short_id)], prism.invalid)
     var large: repositories.RefUpdate[65]
-    for i in 0..<(usize)65: large[i] = change("refs/tags/x", zero, first_id)
+    for i in 0..<(usize)65: large[i] = change("refs/tags/v3.0.3", zero, first_id)
     try rejected(database, large, prism.invalid)
-    var long_name: u8[1025]
-    let prefix = b"refs/tags/"
-    for i in 0..<prefix.length: long_name[i] = prefix[i]
-    for i in prefix.length..<long_name.length: long_name[i] = 'a'
-    try rejected(database, [change((str)long_name, zero, blob_id)], prism.invalid)
-    try repositories.update_refs(database, "alice", "alice", "demo", [change((str)long_name[..<1024], zero, blob_id)])
-    try expect(database, "demo", (str)long_name[..<1024], blob_id)
-    try repositories.update_refs(database, "alice", "alice", "demo", [change((str)long_name[..<1024], blob_id, zero)])
     var denied = false
-    repositories.update_refs(database, "mallory", "alice", "demo", [change("refs/tags/stolen", zero, blob_id)]) catch failure:
+    repositories.update_refs(database, "mallory", "alice", "demo", [change("refs/tags/v4.0.0", zero, blob_id)]) catch failure:
         assert(failure.code == prism.invalid)
         denied = true
     assert(denied)
-    let stolen = repositories.get_ref(database, "mallory", "alice", "demo", "refs/heads/main") catch failure:
+    let stolen = repositories.get_ref(database, "mallory", "alice", "demo", "refs/tags/v1.0.0") catch failure:
         assert(failure.code == prism.invalid)
         return
     stolen.release()
     assert(false)
 
 func read(database: db.Database*) -> !:
-    try expect(database, "demo", "refs/heads/main", second_id)
-    try expect(database, "demo", "refs/tags/v1", blob_id)
-    try absent(database, "demo", "refs/heads/main/child")
-    try absent(database, "demo", "refs/tags/stolen")
+    try expect(database, "demo", "refs/tags/v1.0.0", second_id)
+    try expect(database, "demo", "refs/tags/v1.1.0", blob_id)
+    try absent(database, "demo", "refs/tags/v3.0.1")
+    try absent(database, "demo", "refs/tags/v4.0.0")
 
 func limits(database: db.Database*) -> !:
     try seed(database, "demo")
@@ -130,17 +122,17 @@ func limits(database: db.Database*) -> !:
         let remaining = repositories.max_refs - made
         let count = repositories.max_ref_updates if remaining > repositories.max_ref_updates else remaining
         for i in 0..<count:
-            let label = try strings.format(names[i], f"refs/tags/t{made + i}")
+            let label = try strings.format(names[i], f"refs/tags/v0.1.{made + i}")
             updates[i] = change(label, zero, blob_id)
         try repositories.update_refs(database, "alice", "alice", "demo", updates[..<count])
         made += count
-    try expect(database, "demo", "refs/tags/t1023", blob_id)
-    try rejected(database, [change("refs/tags/overflow", zero, blob_id)], prism.invalid)
-    try absent(database, "demo", "refs/tags/overflow")
+    try expect(database, "demo", "refs/tags/v0.1.1023", blob_id)
+    try rejected(database, [change("refs/tags/v9.0.0", zero, blob_id)], prism.invalid)
+    try absent(database, "demo", "refs/tags/v9.0.0")
     # Net-zero cardinality at the bound is legal, regardless of operation order.
-    try repositories.update_refs(database, "alice", "alice", "demo", [change("refs/tags/replacement", zero, blob_id), change("refs/tags/seed", blob_id, zero)])
-    try expect(database, "demo", "refs/tags/replacement", blob_id)
-    try absent(database, "demo", "refs/tags/seed")
+    try repositories.update_refs(database, "alice", "alice", "demo", [change("refs/tags/v9.0.1", zero, blob_id), change("refs/tags/v0.0.1", blob_id, zero)])
+    try expect(database, "demo", "refs/tags/v9.0.1", blob_id)
+    try absent(database, "demo", "refs/tags/v0.0.1")
 
 var ready: @u64
 var start: @u64
@@ -155,15 +147,14 @@ func attempt(first: bool) -> !:
     while start.load(.acquire) == 0: thread.sleep(1)
     var updates: repositories.RefUpdate[2]
     var count: usize = 1
-    let repo = "batch" if race_case == 1 else "prefix"
-    if race_case == 0:
-        updates[0] = change("refs/heads/topic" if first else "refs/heads/topic/child", zero, first_id)
-    elif race_case == 2:
+    let repo = "batch" if race_case == 0 else "disjoint"
+    if race_case == 1:
         # Disjoint refs of one repository: both batches must land, whichever commits first.
-        updates[0] = change("refs/heads/alpha" if first else "refs/heads/beta", zero, first_id)
+        updates[0] = change("refs/tags/v1.0.0" if first else "refs/tags/v2.0.0", zero, first_id)
     else:
-        updates[0] = change("refs/heads/shared", zero, first_id if first else second_id)
-        updates[1] = change("refs/heads/left" if first else "refs/heads/right", zero, first_id)
+        # Both create the same tag: one batch lands whole, the other not at all.
+        updates[0] = change("refs/tags/v1.0.0", zero, first_id if first else second_id)
+        updates[1] = change("refs/tags/v1.1.0" if first else "refs/tags/v1.2.0", zero, first_id)
         count = 2
     repositories.update_refs(database.value(), "alice", "alice", repo, updates[..<count]) catch failure:
         if failure.code == prism.conflict: _ = conflicts.add(1, .relaxed)
@@ -195,10 +186,10 @@ func has_ref(database: db.Database*, repo: str, name: str) -> bool!:
     return true
 
 func race(database: db.Database*) -> !:
-    try seed(database, "prefix")
     try seed(database, "batch")
+    try seed(database, "disjoint")
     try database.listen()
-    for round in 0..<(usize)3:
+    for round in 0..<(usize)2:
         race_case = round
         ready.store(0, .relaxed)
         start.store(0, .relaxed)
@@ -211,14 +202,13 @@ func race(database: db.Database*) -> !:
         start.store(1, .release)
         try one.join()
         try two.join()
-        let expected_wins: u64 = 2 if round == 2 else 1
+        let expected_wins: u64 = 2 if round == 1 else 1
         assert(wins.load(.acquire) == expected_wins and conflicts.load(.acquire) == 2 - expected_wins and unexpected.load(.acquire) == 0)
-    assert(try has_ref(database, "prefix", "refs/heads/topic") != try has_ref(database, "prefix", "refs/heads/topic/child"))
-    assert(try has_ref(database, "prefix", "refs/heads/alpha") and try has_ref(database, "prefix", "refs/heads/beta"))
-    let left = try has_ref(database, "batch", "refs/heads/left")
-    let right = try has_ref(database, "batch", "refs/heads/right")
+    assert(try has_ref(database, "disjoint", "refs/tags/v1.0.0") and try has_ref(database, "disjoint", "refs/tags/v2.0.0"))
+    let left = try has_ref(database, "batch", "refs/tags/v1.1.0")
+    let right = try has_ref(database, "batch", "refs/tags/v1.2.0")
     assert(left != right)
-    try expect(database, "batch", "refs/heads/shared", first_id if left else second_id)
+    try expect(database, "batch", "refs/tags/v1.0.0", first_id if left else second_id)
 
 pub func main(arguments: str[]) -> i32!:
     assert(arguments.length == 3)

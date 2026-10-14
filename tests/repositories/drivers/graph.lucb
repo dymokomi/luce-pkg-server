@@ -20,7 +20,7 @@ func refuse(database: db.Database*, id: const u8[], required: ErrorCode? = none)
     let before = try snapshot.value().revision()
     var denied = false
     repositories.update_refs(database, "alice", "alice", "graph",
-                             [repositories.RefUpdate(name = "refs/tags/rejected", expected = zero, target = id)]) catch failure:
+                             [repositories.RefUpdate(name = "refs/tags/v9.9.9", expected = zero, target = id)]) catch failure:
         if let code = required: assert(failure.code == code)
         denied = true
     assert(denied)
@@ -41,14 +41,14 @@ func cases(database: db.Database*) -> !:
     let text = try strings.format(payload, f"tree {(str)tree_text}\nauthor Fixture <a@b> 1 +0000\ncommitter Fixture <a@b> 1 +0000\n\ninitial\n")
     try put(database, "commit", text.bytes, commit)
     try repositories.update_refs(database, "alice", "alice", "graph",
-                                 [repositories.RefUpdate(name = "refs/heads/main", expected = zero, target = commit)])
+                                 [repositories.RefUpdate(name = "refs/tags/v1.0.0", expected = zero, target = commit)])
     var commit_text: u8[40]
     _ = try git.hex_id(commit, commit_text)
     var tag: u8[20]
     let tag_text = try strings.format(payload, f"object {(str)commit_text}\ntype commit\ntag v1\n\nrelease\n")
     try put(database, "tag", tag_text.bytes, tag)
     try repositories.update_refs(database, "alice", "alice", "graph",
-                                 [repositories.RefUpdate(name = "refs/tags/v1", expected = zero, target = tag)])
+                                 [repositories.RefUpdate(name = "refs/tags/v1.0.1", expected = zero, target = tag)])
     var wrong: u8[20]
     let wrong_tag = try strings.format(payload, f"object {(str)commit_text}\ntype tree\ntag wrong\n\n")
     try put(database, "tag", wrong_tag.bytes, wrong)
@@ -63,13 +63,13 @@ func cases(database: db.Database*) -> !:
     n = try git.encode_tree_entry(git.TreeEntry(mode = "40000", name = "wrongtype", id = blob), payload)
     try put(database, "tree", payload[..<n], wrong)
     try refuse(database, wrong)
-    # A parent the repository does not hold is history, which GitHub keeps: the walk ends
-    # there, so a release pushed without its history publishes (its tree must be whole).
+    # A commit's parents are history, which GitHub keeps: the walk never follows them, so a
+    # release pushed without its history publishes (its tree must be whole).
     let parent_text = try strings.format(payload, f"tree {(str)tree_text}\nparent 1111111111111111111111111111111111111111\nauthor A\ncommitter A\n\n")
     var snapshot_commit: u8[20]
     try put(database, "commit", parent_text.bytes, snapshot_commit)
     try repositories.update_refs(database, "alice", "alice", "graph",
-                                 [repositories.RefUpdate(name = "refs/tags/snapshot", expected = zero, target = snapshot_commit)])
+                                 [repositories.RefUpdate(name = "refs/tags/v1.0.2", expected = zero, target = snapshot_commit)])
     var missing_text: u8[40]
     _ = try git.hex_id(missing, missing_text)
     let hollow_text = try strings.format(payload, f"tree {(str)missing_text}\nparent 1111111111111111111111111111111111111111\nauthor A\ncommitter A\n\n")
@@ -79,15 +79,15 @@ func cases(database: db.Database*) -> !:
     n = try git.encode_tree_entry(git.TreeEntry(mode = "160000", name = "submodule", id = missing), payload)
     try put(database, "tree", payload[..<n], wrong)
     try repositories.update_refs(database, "alice", "alice", "graph",
-                                 [repositories.RefUpdate(name = "refs/tags/gitlink", expected = zero, target = wrong)])
+                                 [repositories.RefUpdate(name = "refs/tags/v1.0.3", expected = zero, target = wrong)])
     # A bad graph in a batch cannot publish an otherwise valid sibling ref.
     try put(database, "commit", b"broken", wrong)
     let before = try database.snapshot()
     defer before.release()
     var failed = false
     repositories.update_refs(database, "alice", "alice", "graph", [
-        repositories.RefUpdate(name = "refs/tags/good", expected = zero, target = blob),
-        repositories.RefUpdate(name = "refs/tags/bad", expected = zero, target = wrong)]) catch:
+        repositories.RefUpdate(name = "refs/tags/v2.0.0", expected = zero, target = blob),
+        repositories.RefUpdate(name = "refs/tags/v2.0.1", expected = zero, target = wrong)]) catch:
         failed = true
     assert(failed)
     let after = try database.snapshot()
@@ -116,7 +116,7 @@ pub func main(arguments: str[]) -> i32!:
     try repositories.use_objects(arguments[1])
     defer database.release()
     if arguments[2] == "read":
-        let value = try repositories.get_ref(database.value(), "alice", "alice", "graph", "refs/heads/main")
+        let value = try repositories.get_ref(database.value(), "alice", "alice", "graph", "refs/tags/v1.0.0")
         defer value.release()
         assert(value.value().bytes().length == 20)
     else:

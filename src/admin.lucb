@@ -139,7 +139,7 @@ func remove(path: str, coordinate: str, force: bool) -> i32!:
         print(f"{coordinate}: no such package")
         return 1
     if in_database:
-        print(f"removed repository {coordinate}: {removed.releases} release tags, {removed.refs} other refs, {removed.objects} objects listed ({removed.deleted} object files deleted, {removed.shared} shared with other repositories kept)")
+        print(f"removed repository {coordinate}: {removed.releases} release tags, {removed.objects} objects listed ({removed.deleted} object files deleted, {removed.shared} shared with other repositories kept)")
     else:
         print(f"{coordinate} had no repository")
     let listed = "index entry" if on_site.listed else "no index entry"

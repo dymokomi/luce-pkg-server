@@ -1,10 +1,13 @@
-"""Shared by the Git-level registry tests: HTTP requests, the registry process, and a
-stock Git client that creates repositories and pushes releases as `testadmin`."""
+"""Shared by the Git-level registry tests: HTTP requests, the registry process, a stock
+Git client that creates repositories and pushes releases as `testadmin`, and a release
+read back from the site's files, as luc installs it."""
+import base64
 import http.client
 import json
 import os
 import socket
 import subprocess
+import tempfile
 import time
 
 
@@ -55,11 +58,15 @@ class Client:
                                 '  *Password*) printf "%s\\n" "$LUCE_GIT_TOKEN" ;;\n  *) exit 1 ;;\nesac\n')
         self.askpass.chmod(0o700)
 
-    def environment(self, repository):
+    def credential(self, repository):
         status, token = request(self.port, 'POST', '/v1/credentials',
                                 {'scope': 'git:write', 'repository': repository, 'lifetime_seconds': 3600},
                                 self.session)
         assert status == 201, (status, token)
+        return token
+
+    def environment(self, repository):
+        token = self.credential(repository)
         return dict(os.environ, GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT='0',
                     GIT_AUTHOR_NAME='Fixture', GIT_AUTHOR_EMAIL='fixture@example.test',
                     GIT_COMMITTER_NAME='Fixture', GIT_COMMITTER_EMAIL='fixture@example.test',
@@ -98,10 +105,24 @@ class Client:
                                 env=environment, capture_output=True, timeout=600)
         return result.returncode, result.stderr, time.monotonic() - started
 
-    def clone(self, name, destination):
-        subprocess.run(['git', 'clone', '-q', self.endpoint(name), str(destination)], check=True,
-                       capture_output=True, timeout=600, env=dict(os.environ, GIT_TERMINAL_PROMPT='0'))
-        subprocess.run(['git', '-C', str(destination), 'fsck', '--strict'], check=True, capture_output=True, timeout=600)
+    def discovery(self, repository):
+        """The receive advertisement a push of `repository` starts with: its release tags."""
+        basic = base64.b64encode(b'testadmin:' + self.credential(repository)).decode()
+        return request(self.port, 'GET', f'/git/testadmin/{repository}/info/refs?service=git-receive-pack',
+                       headers={'Authorization': 'Basic ' + basic})
+
+
+def released(site, coordinate, version, path):
+    """The file at `path` in release `version` of `coordinate`, from the site's pack and the
+    commit its `versions` line names: what an install reads."""
+    lines = (site / coordinate / 'versions').read_text().splitlines()
+    commit = next(line.split()[2] for line in lines if line.split()[0] == version)
+    with tempfile.TemporaryDirectory(prefix='release-') as scratch:
+        subprocess.run(['git', 'init', '-q', '--bare', scratch], check=True, capture_output=True, timeout=60)
+        subprocess.run(['git', '-C', scratch, 'index-pack', '--stdin'], input=(site / coordinate / f'{version}.pack').read_bytes(),
+                       check=True, capture_output=True, timeout=600)
+        return subprocess.run(['git', '-C', scratch, 'show', f'{commit}:{path}'], check=True, capture_output=True,
+                              timeout=600).stdout
 
 
 def free_port():

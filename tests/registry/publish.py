@@ -3,6 +3,7 @@
 snapshot of HEAD without its history or development paths and only once HEAD is on its
 origin (GitHub in production), then `luc latest` and `luc add` from another project, which
 downloads and checks the release pack."""
+import base64
 import http.client
 import http.server
 import os
@@ -156,9 +157,18 @@ with tempfile.TemporaryDirectory(prefix='registry-publish-', dir='/tmp') as temp
             assert sorted(files) == ['data.bin', 'package.prisma', 'src/greeter.lucb'], files
             assert 'parent ' not in git(unpacked, 'cat-file', 'commit', commit)
             assert f'Source-Commit: {head}' in git(unpacked, 'cat-file', 'commit', commit)
-            # No branch on the registry, and no tag left behind here.
-            advertised = git(work, 'ls-remote', 'pkg')
-            assert 'refs/heads/' not in advertised and 'refs/tags/v0.1.0' in advertised, advertised
+            # No branch on the registry, and no tag left behind here. The push discovery shows
+            # the registry's refs, with a password from `luc git-token`.
+            password = run(['git-token', 'greeter']).stdout.strip()
+            connection = http.client.HTTPConnection('127.0.0.1', proxy.server_port, timeout=60)
+            try:
+                basic = base64.b64encode(b'testadmin:' + password).decode()
+                connection.request('GET', '/git/testadmin/greeter/info/refs?service=git-receive-pack',
+                                   headers={'Authorization': 'Basic ' + basic})
+                advertised = connection.getresponse().read()
+            finally:
+                connection.close()
+            assert b'refs/heads/' not in advertised and b'refs/tags/v0.1.0' in advertised, advertised
             assert git(work, 'tag', '-l') == ''
             print('PASS luc publish sends one snapshot of HEAD: no history, tests or dev; HEAD named as its source', flush=True)
 

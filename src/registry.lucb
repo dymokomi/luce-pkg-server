@@ -12,17 +12,15 @@ import repositories
 from luce_git import git
 import memory
 import io
-from luce_pkg import pkg
 import http_auth as transport_auth
 from luce_crypto import native as crypto
 import time
 import rate_limit
 import site as site_files
-import gzip
-import sync
-from luce_prism import prism
 
 let max_release_upload: usize = repositories.max_object_bytes + 24576 + 3309 + 8
+## The largest response: a receive advertisement, one line per release tag.
+let max_advertisement: usize = 4194304
 
 func failed(code: ErrorCode, message: str) -> interop.Outcome[interop.Reference[http.Response]]:
     let copied = interop.copy_text(message) catch failure:
@@ -91,52 +89,6 @@ func credential_bearer(request: const http.Request*) -> str!:
 func field(root: json.View, name: str) -> str!:
     let value = root.member(name) else error(auth.invalid, "missing field")
     return value.text() else error(auth.invalid, "string field required")
-
-func positive_number(value: str, maximum: i64) -> i64!:
-    if value.length == 0: error(auth.invalid, "positive integer required")
-    var result: i64 = 0
-    for byte in value.bytes:
-        if byte < '0' or byte > '9': error(auth.invalid, "positive integer required")
-        result = result * 10 + (i64)(byte - '0')
-        if result > maximum: error(auth.invalid, "positive integer exceeds limit")
-    if result <= 0: error(auth.invalid, "positive integer required")
-    return result
-
-func json_object(maximum: usize = 1048576) -> interop.Reference[json.Value]!:
-    let native = try new json.Value(maximum) in memory.heap
-    return interop.Reference[json.Value].adopt(native, json.value_type, memory.heap) catch failure:
-        native.close()
-        free(native) in memory.heap
-        error(failure.code, failure.message)
-
-func pull_request_document(record: repositories.PullRequest*) -> interop.Reference[json.Value]!:
-    let result = try json_object(16384)
-    errdefer result.release()
-    let value = result.value()
-    var base_id: u8[40]
-    var head_id: u8[40]
-    var merge_id: u8[40]
-    _ = try git.hex_id(record.base_id, base_id)
-    _ = try git.hex_id(record.head_id, head_id)
-    _ = try git.hex_id(record.merge_id, merge_id)
-    try value.set_integer("number", record.number)
-    try value.set_text("author", (str)record.author[..<record.author_length])
-    try value.set_text("title", (str)record.title[..<record.title_length])
-    try value.set_text("body", (str)record.body[..<record.body_length])
-    try value.set_text("base", (str)record.base[..<record.base_length])
-    try value.set_text("head", (str)record.head[..<record.head_length])
-    try value.set_text("base_commit", (str)base_id)
-    try value.set_text("head_commit", (str)head_id)
-    try value.set_text("merge_commit", "" if record.state != .merged else (str)merge_id)
-    try value.set_text("state", "open" if record.state == .open else ("closed" if record.state == .closed else "merged"))
-    try value.set_integer("created_at", record.created_at)
-    try value.set_integer("updated_at", record.updated_at)
-    try value.set_text("closed_by", (str)record.closed_by[..<record.closed_by_length])
-    return result
-
-func json_reply(value: interop.Reference[json.Value], status: i64 = 200) -> interop.Outcome[interop.Reference[http.Response]]:
-    let text = value.value().encode()
-    return binary_reply(text.bytes, "application/json", status)
 
 struct App:
     var database: interop.Reference[db.Database]
@@ -263,68 +215,42 @@ struct App:
             return reply("repository creation failed", 503)
         return reply("created", 201)
 
+    ## Git smart HTTP for `git push` of release tags, the only thing a client sends the
+    ## registry: discovery and receive-pack, with a git:write credential for this
+    ## repository. Nothing is served to clone or fetch: installs read the site's files.
     func git_http(view: interop.View[http.Request]) -> interop.Outcome[interop.Reference[http.Response]]:
         let request = view.value()
         let owner = request.parameter("owner") else return reply("invalid path", 400)
         let name = request.parameter("name") else return reply("invalid path", 400)
         if not repositories.valid_name(name): return reply("invalid repository", 400)
-        var upload = false
-        if request.method() == "GET" or request.method() == "HEAD":
+        let discovery = request.method() == "GET" or request.method() == "HEAD"
+        if discovery:
             let service = (request.query("service") catch: return reply("invalid service", 400)) else return reply("service required", 400)
-            if service != "git-receive-pack" and service != "git-upload-pack": return reply("unsupported Git service", 403)
-            upload = service == "git-upload-pack"
-        elif strings.ends_with(request.path(), "/git-upload-pack"):
-            upload = true
-        # Everything is public: clone and fetch need no account and read as the owner.
-        # Only a push authenticates, with a git:write credential for this repository.
-        var principal = owner
+            if service != "git-receive-pack":
+                return reply("the registry takes release tags by push and serves no Git reads; clone from the package's GitHub repository", 403)
+        let header = (request.header("Authorization") catch: return basic_challenge()) else return basic_challenge()
         var credential_buffer: u8[128]
         defer crypto.wipe(credential_buffer)
-        var who: interop.Reference[prism.Value]? = none
-        defer release_principal(who)
-        if upload:
-            if not readers.enter(): return busy()
-        else:
-            let header = (request.header("Authorization") catch: return basic_challenge()) else return basic_challenge()
-            let credential = transport_auth.decode_basic(header, credential_buffer) catch: return basic_challenge()
-            if credential.username != owner: return basic_challenge()
-            let authorized = self.authority.value().authorize_credential(credential.token, auth.scope_git_write, owner, name) catch: return basic_challenge()
-            who = authorized
-            principal = authorized.value().text_at() catch: return reply("internal error", 500)
-        defer if_upload_leave(upload)
-        if request.method() == "GET" or request.method() == "HEAD":
-            let output = new u8[4194304] --- in memory.heap catch: return reply("internal error", 500)
+        let credential = transport_auth.decode_basic(header, credential_buffer) catch: return basic_challenge()
+        if credential.username != owner: return basic_challenge()
+        let who = self.authority.value().authorize_credential(credential.token, auth.scope_git_write, owner, name) catch: return basic_challenge()
+        defer who.release()
+        let principal = who.value().text_at() catch: return reply("internal error", 500)
+        if discovery:
+            let output = new u8[max_advertisement] --- in memory.heap catch: return reply("internal error", 500)
             defer free(output) in memory.heap
-            let n = repositories.advertise_receive(self.database.value(), principal, owner, name, output, upload) catch failure:
+            let n = repositories.advertise_receive(self.database.value(), principal, owner, name, output) catch failure:
                 if failure.code == auth.missing: return reply("repository not found", 404)
                 return reply("discovery failed", 503)
-            return binary_reply(output[..<n], "application/x-git-upload-pack-advertisement" if upload else "application/x-git-receive-pack-advertisement")
+            return binary_reply(output[..<n], "application/x-git-receive-pack-advertisement")
         let content_type = (request.header("Content-Type") catch: return reply("invalid content type", 415)) else return reply("content type required", 415)
-        if upload:
-            if content_type != "application/x-git-upload-pack-request": return reply("unsupported content type", 415)
-            let body = request.body() catch: return reply("invalid body", 400)
-            defer body.release()
-            let received = body.value().bytes(1048576) catch: return reply("invalid fetch body", 400)
-            let inflated = inflated_body(request, received, 1048576) catch failure:
-                return reply(failure.message, 415 if failure.code == prism.unsupported else 400)
-            defer release_inflated(inflated)
-            var wire: const u8[] = received
-            if let bytes = inflated: wire = bytes
-            _ = git.decode_fetch(wire) catch: return reply("invalid fetch request", 400)
-            let output = new u8[67108864] --- in memory.heap catch: return reply("internal error", 500)
-            defer free(output) in memory.heap
-            let n = repositories.upload_pack(self.database.value(), principal, owner, name, wire, output) catch:
-                return reply("fetch rejected", 403)
-            return binary_reply(output[..<n], "application/x-git-upload-pack-result")
         if content_type != "application/x-git-receive-pack-request": return reply("unsupported content type", 415)
+        # Git compresses only fetch requests; a push body is sent as it is.
+        let encoding = (request.header("Content-Encoding") catch: return reply("invalid content encoding", 400)) else ""
+        if encoding.length > 0 and encoding != "identity": return reply("unsupported content encoding", 415)
         let body = request.body() catch: return reply("invalid body", 400)
         defer body.release()
-        let received = body.value().bytes((i64)repositories.max_object_bytes) catch: return reply("invalid body", 400)
-        let inflated = inflated_body(request, received, repositories.max_object_bytes) catch failure:
-            return reply(failure.message, 415 if failure.code == prism.unsupported else 400)
-        defer release_inflated(inflated)
-        var wire: const u8[] = received
-        if let bytes = inflated: wire = bytes
+        let wire = body.value().bytes((i64)repositories.max_object_bytes) catch: return reply("invalid body", 400)
         # Before a push larger than its buffer, Git sends a lone flush packet to check that
         # it is authorized. It already is by this point; answer with an empty result.
         if wire.length == 4 and (str)wire == "0000": return binary_reply(b"", "application/x-git-receive-pack-result")
@@ -341,8 +267,7 @@ struct App:
         defer free(output) in memory.heap
         var accepted = true
         # Release-rule failures and the limits a push exceeded are reported to the pusher, who
-        # can act on them (`luc publish` pushes a long history in steps); anything else stays
-        # generic.
+        # can act on them; anything else stays generic.
         var reason_buffer: u8[160]
         var reason_size: usize = 0
         _ = repositories.receive_pack(self.database.value(), principal, owner, name, wire, (str)self.site[..<self.site_size]) catch failure:
@@ -375,46 +300,6 @@ struct App:
             used += git.encode_packet(git.PacketKind.data, text.bytes, output[used..]) catch: return reply("internal error", 500)
         used += git.encode_packet(git.PacketKind.flush, b"", output[used..]) catch: return reply("internal error", 500)
         return binary_reply(output[..<used], "application/x-git-receive-pack-result")
-
-## A smart-HTTP request body Git sent with `Content-Encoding: gzip`, inflated into a
-## heap allocation the caller releases and capped at the same `limit` as an
-## uncompressed body; none when the body is not encoded.
-func inflated_body(request: const http.Request*, received: const u8[], limit: usize) -> u8[]?!:
-    let encoding = (request.header("Content-Encoding") catch: error(auth.invalid, "invalid content encoding")) else return none
-    if encoding.length == 0 or encoding == "identity": return none
-    if encoding != "gzip" and encoding != "x-gzip": error(prism.unsupported, "unsupported content encoding")
-    return gzip.inflate(received, limit) catch: error(auth.invalid, "invalid gzip body")
-
-func release_inflated(inflated: u8[]?):
-    if let bytes = inflated: free(bytes) in memory.heap
-
-## Anonymous clone and fetch do real work per request, so only a few run at once.
-struct Readers:
-    var mutex: sync.Mutex
-    var active: u32
-
-    func enter() -> bool:
-        self.mutex.lock()
-        defer self.mutex.unlock()
-        if self.active >= 6: return false
-        self.active += 1
-        return true
-
-    func leave():
-        self.mutex.lock()
-        defer self.mutex.unlock()
-        if self.active > 0: self.active -= 1
-
-var readers: Readers
-
-func if_upload_leave(upload: bool):
-    if upload: readers.leave()
-
-func release_principal(who: interop.Reference[prism.Value]?):
-    if let held = who: held.release()
-
-func busy() -> interop.Outcome[interop.Reference[http.Response]]:
-    return reply("too many concurrent fetches; retry shortly", 503)
 
 let app_type = interop.Type[App]("registry", App.close)
 
@@ -491,7 +376,6 @@ func configure(socket: str) -> interop.Outcome[http.Application]:
     defer git_http.release()
     router.get("/git/{owner}/{name}/info/refs", git_http) catch failure: trap(failure.message)
     router.post("/git/{owner}/{name}/git-receive-pack", git_http) catch failure: trap(failure.message)
-    router.post("/git/{owner}/{name}/git-upload-pack", git_http) catch failure: trap(failure.message)
     let result = router.application() catch failure: trap(failure.message)
     return interop.Outcome[http.Application].success(interop.Owned[http.Application](result, result.owner))
 
@@ -515,7 +399,7 @@ func run(arguments: str[]) -> i32!:
     let socket = try strings.format(socket_buffer, f"{arguments[1]}.sock")
     var options = http.ServerConfig(address = "127.0.0.1", port = port, network_workers = 2, application_workers = 2,
                                     body_limit = (i64)max_release_upload, memory_body_limit = 65536,
-                                    response_limit = (i64)repositories.max_object_bytes,
+                                    response_limit = (i64)max_advertisement,
                                     request_timeout_ms = 300000, idle_timeout_ms = 15000,
                                     response_timeout_ms = 300000, application_timeout_ms = 300000,
                                     shutdown_timeout_ms = 30000)

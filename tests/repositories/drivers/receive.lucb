@@ -3,11 +3,56 @@ from luce_db import db
 from luce_auth import auth
 from luce_prism import prism
 from luce_git import git
+import c
+from luce_std import files, paths
 import memory
 import strings
 
-let first = b"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nauthor A\ncommitter A\n\nfirst\n"
 var zero: u8[20]
+
+## One release of alice/push as a push carries it: package.prisma, its tree, a commit with
+## no parent or with `parent`, and the annotated tag `v<version>` naming that commit.
+struct Release:
+    var definition: u8[256]
+    var definition_size: usize
+    var tree: u8[64]
+    var tree_size: usize
+    var commit: u8[512]
+    var commit_size: usize
+    var tag: u8[256]
+    var tag_size: usize
+    var tag_id: u8[20]
+    var commit_id: u8[20]
+
+    func objects(output: git.Object[4]*):
+        (*output)[0] = git.Object(kind = "blob", payload = self.definition[..<self.definition_size])
+        (*output)[1] = git.Object(kind = "tree", payload = self.tree[..<self.tree_size])
+        (*output)[2] = git.Object(kind = "commit", payload = self.commit[..<self.commit_size])
+        (*output)[3] = git.Object(kind = "tag", payload = self.tag[..<self.tag_size])
+
+func release(version: str, parent: const u8[]) -> Release!:
+    var made: Release
+    made.definition_size = (try strings.format(made.definition, f"#prisma 4.0\ndef package \"push\" {{\n    str owner = \"alice\"\n    str version = \"{version}\"\n    str kind = \"package\"\n    str language = \"luce-base\"\n    str description = \"Receive fixture\"\n}}\n")).length
+    var blob: u8[20]
+    _ = try git.hash_object("blob", made.definition[..<made.definition_size], blob)
+    made.tree_size = try git.encode_tree_entry(git.TreeEntry(mode = "100644", name = "package.prisma", id = blob), made.tree)
+    var tree_id: u8[20]
+    _ = try git.hash_object("tree", made.tree[..<made.tree_size], tree_id)
+    var tree_text: u8[40]
+    _ = try git.hex_id(tree_id, tree_text)
+    var parent_text: u8[40]
+    var parent_line: u8[64]
+    var parents = ""
+    if parent.length == 20:
+        _ = try git.hex_id(parent, parent_text)
+        parents = try strings.format(parent_line, f"parent {(str)parent_text}\n")
+    made.commit_size = (try strings.format(made.commit, f"tree {(str)tree_text}\n{parents}author A <a@b> 1 +0000\ncommitter A <a@b> 1 +0000\n\npush {version}\n")).length
+    _ = try git.hash_object("commit", made.commit[..<made.commit_size], made.commit_id)
+    var commit_text: u8[40]
+    _ = try git.hex_id(made.commit_id, commit_text)
+    made.tag_size = (try strings.format(made.tag, f"object {(str)commit_text}\ntype commit\ntag v{version}\n\nrelease {version}\n")).length
+    _ = try git.hash_object("tag", made.tag[..<made.tag_size], made.tag_id)
+    return made
 
 func append(wire: u8[], at: usize, old: const u8[], target: const u8[], name: str, caps: str, initial: bool) -> usize!:
     var old_text: u8[40]
@@ -18,6 +63,13 @@ func append(wire: u8[], at: usize, old: const u8[], target: const u8[], name: st
     let separator = "\0" if initial else ""
     let line = try strings.format(buffer, f"{(str)old_text} {(str)new_text} {name}{separator}{caps}")
     return at + try git.encode_packet(git.PacketKind.data, line.bytes, wire[at..])
+
+## One ref command, then the pack of `objects`.
+func push_wire(wire: u8[], old: const u8[], target: const u8[], name: str, objects: const git.Object[], caps: str = "report-status atomic ofs-delta") -> usize!:
+    var n = try append(wire, 0, old, target, name, caps, true)
+    n += try git.encode_packet(git.PacketKind.flush, b"", wire[n..])
+    n += try git.encode_pack(objects, wire[n..])
+    return n
 
 func expect(database: db.Database*, name: str, id: const u8[]) -> !:
     let ref = try repositories.get_ref(database, "alice", "alice", "push", name)
@@ -32,11 +84,14 @@ func absent(database: db.Database*, name: str) -> !:
     ref.release()
     assert(false)
 
-func no_writes(database: db.Database*, wire: const u8[]) -> !:
+## The push is refused and the database is as it was; with `reason`, the refusal is one
+## the pusher is told, starting `release: `.
+func no_writes(database: db.Database*, wire: const u8[], site: str, reason: bool = false) -> !:
     let before = try database.snapshot()
     defer before.release()
     var failed = false
-    _ = repositories.receive_pack(database, "alice", "alice", "push", wire) catch:
+    _ = repositories.receive_pack(database, "alice", "alice", "push", wire, site) catch failure:
+        if reason: assert(strings.starts_with(failure.message, "release: "))
         failed = true
         recover 0
     assert(failed)
@@ -44,180 +99,85 @@ func no_writes(database: db.Database*, wire: const u8[]) -> !:
     defer after.release()
     assert(try before.value().revision() == try after.value().revision())
 
-func fetch_wire(target: const u8[], base: const u8[], done: bool, wire: u8[], caps: str = "ofs-delta no-progress") -> usize!:
-    var encoded: u8[40]
-    _ = try git.hex_id(target, encoded)
-    var line: u8[128]
-    let separator = " " if caps.length > 0 else ""
-    var text = try strings.format(line, f"want {(str)encoded}{separator}{caps}\n")
-    var used = try git.encode_packet(git.PacketKind.data, text.bytes, wire)
-    used += try git.encode_packet(git.PacketKind.flush, b"", wire[used..])
-    if base.length > 0:
-        _ = try git.hex_id(base, encoded)
-        text = try strings.format(line, f"have {(str)encoded}\n")
-        used += try git.encode_packet(git.PacketKind.data, text.bytes, wire[used..])
-    used += try git.encode_packet(git.PacketKind.data if done else git.PacketKind.flush, b"done\n" if done else b"", wire[used..])
-    return used
-
-func fetch_cases(database: db.Database*, target: const u8[], parent: const u8[]) -> !:
-    var wire: u8[512]
-    var output: u8[16384]
-    var empty: const u8[]
-    var encoded: u8[40]
-    _ = try git.hex_id(target, encoded)
-    var tag_buffer: u8[256]
-    let tag = try strings.format(tag_buffer, f"object {(str)encoded}\ntype commit\ntag annotated\n\nfetch tag\n")
-    let tag_size = try git.encode_object("tag", tag.bytes, output)
-    var tag_id: u8[20]
-    try repositories.put_object(database, "alice", "alice", "push", output[..<tag_size], tag_id)
-    var updates: repositories.RefUpdate[1]
-    updates[0] = repositories.RefUpdate(name = "refs/tags/annotated", expected = zero, target = tag_id)
-    try repositories.update_refs(database, "alice", "alice", "push", updates)
-    let before = try database.snapshot()
-    defer before.release()
-    let discovery = try repositories.advertise_upload(database, "alice", "alice", "push", output)
-    assert(strings.contains((str)output[..<discovery], "symref=HEAD:refs/heads/main"))
-    assert(strings.contains((str)output[..<discovery], "refs/tags/annotated^{}"))
-    var n = try fetch_wire(target, empty, true, wire)
-    var used = try repositories.upload_pack(database, "alice", "alice", "push", wire[..<n], output)
-    var response = try git.decode_packet(output[..<used])
-    assert((str)response.payload == "NAK\n")
-    var pack = try git.decode_pack(output[response.consumed..<used])
-    defer pack.close()
-    assert(pack.items.length == 3)
-    n = try fetch_wire(target, parent, true, wire)
-    used = try repositories.upload_pack(database, "alice", "alice", "push", wire[..<n], output)
-    response = try git.decode_packet(output[..<used])
-    assert(strings.starts_with((str)response.payload, "ACK "))
-    pack.close()
-    pack = try git.decode_pack(output[response.consumed..<used])
-    assert(pack.items.length == 1 and pack.items[0].kind == "commit")
-    for i in 0..<(usize)20: assert(pack.items[0].id[i] == target[i])
-    n = try fetch_wire(target, target, true, wire)
-    used = try repositories.upload_pack(database, "alice", "alice", "push", wire[..<n], output)
-    response = try git.decode_packet(output[..<used])
-    pack.close()
-    pack = try git.decode_pack(output[response.consumed..<used])
-    assert(pack.items.length == 0)
-    n = try fetch_wire(target, parent, false, wire)
-    used = try repositories.upload_pack(database, "alice", "alice", "push", wire[..<n], output)
-    response = try git.decode_packet(output[..<used])
-    assert(response.consumed == used and strings.starts_with((str)response.payload, "ACK "))
-    var unknown: u8[20]
-    for i in 0..<(usize)20: unknown[i] = 17
-    n = try fetch_wire(target, unknown, false, wire)
-    used = try repositories.upload_pack(database, "alice", "alice", "push", wire[..<n], output)
-    assert((str)(try git.decode_packet(output[..<used])).payload == "NAK\n")
-    var failed = false
-    _ = repositories.upload_pack(database, "bob", "alice", "push", wire[..<n], output) catch:
-        failed = true
-        recover 0
-    assert(failed)
-    n = try fetch_wire(unknown, empty, true, wire)
-    failed = false
-    _ = repositories.upload_pack(database, "alice", "alice", "push", wire[..<n], output) catch:
-        failed = true
-        recover 0
-    assert(failed)
-    n = try fetch_wire(target, empty, true, wire)
-    failed = false
-    _ = repositories.upload_pack(database, "alice", "alice", "push", wire[..<n], output[..<16]) catch:
-        failed = true
-        recover 0
-    assert(failed)
-    n = try fetch_wire(target, empty, true, wire, "")
-    used = try repositories.upload_pack(database, "alice", "alice", "push", wire[..<n], output)
-    assert((str)(try git.decode_packet(output[..<used])).payload == "NAK\n")
-    n = try fetch_wire(target, empty, true, wire, "side-band-64k")
-    failed = false
-    _ = repositories.upload_pack(database, "alice", "alice", "push", wire[..<n], output) catch:
-        failed = true
-        recover 0
-    assert(failed)
-    let after = try database.snapshot()
-    defer after.release()
-    assert(try before.value().revision() == try after.value().revision())
-
-func cases(database: db.Database*) -> !:
+func cases(database: db.Database*, site: str) -> !:
     let advertisement = try new u8[2097152] --- in memory.heap
     defer free(advertisement) in memory.heap
     let empty_advertisement = try repositories.advertise_receive(database, "alice", "alice", "push", advertisement)
-    assert(strings.contains((str)advertisement[..<empty_advertisement], "capabilities^{}"))
-    var id: u8[20]
-    _ = try git.hash_object("commit", first, id)
-    var objects: git.Object[2]
-    objects[0] = git.Object(kind = "tree", payload = b"")
-    objects[1] = git.Object(kind = "commit", payload = first)
+    let offered = (str)advertisement[..<empty_advertisement]
+    assert(strings.contains(offered, "capabilities^{}") and not strings.contains(offered, "delete-refs"))
+    var first = try release("1.0.0", b"")
+    var objects: git.Object[4]
+    first.objects(&objects)
     var wire: u8[16384]
-    var n = try append(wire, 0, zero, id, "refs/heads/main", "report-status atomic ofs-delta", true)
-    n = try append(wire, n, zero, id, "refs/tags/keep", "", false)
-    n += try git.encode_packet(git.PacketKind.flush, b"", wire[n..])
-    n += try git.encode_pack(objects, wire[n..])
+    var n = try push_wire(wire, zero, first.tag_id, "refs/tags/v1.0.0", objects)
+    # Without a site to publish to, nothing is taken.
+    try no_writes(database, wire[..<n], "", reason = true)
     wire[n - 1] ^= 1
-    try no_writes(database, wire[..<n])
+    try no_writes(database, wire[..<n], site)
     wire[n - 1] ^= 1
     var denied = false
-    _ = repositories.receive_pack(database, "bob", "alice", "push", wire[..<n]) catch:
+    _ = repositories.receive_pack(database, "bob", "alice", "push", wire[..<n], site) catch:
         denied = true
         recover 0
     assert(denied)
-    assert(try repositories.receive_pack(database, "alice", "alice", "push", wire[..<n]) == 2)
-    try expect(database, "refs/heads/main", id)
-    try expect(database, "refs/tags/keep", id)
+    assert(try repositories.receive_pack(database, "alice", "alice", "push", wire[..<n], site) == 1)
+    try expect(database, "refs/tags/v1.0.0", first.tag_id)
+    let pack_file = try paths.join(site, "alice/push/1.0.0.pack")
+    defer pack_file.release()
+    assert(files.exists((c.str)pack_file.value))
     let advertised = try repositories.advertise_receive(database, "alice", "alice", "push", advertisement)
-    assert(strings.contains((str)advertisement[..<advertised], "refs/heads/main"))
+    assert(strings.contains((str)advertisement[..<advertised], "refs/tags/v1.0.0"))
     var too_small = false
     _ = repositories.advertise_receive(database, "alice", "alice", "push", advertisement[..<4]) catch:
         too_small = true
         recover 0
     assert(too_small)
-    # A stale create fails without changing either ref or adding duplicate objects.
-    try no_writes(database, wire[..<n])
-    n = try append(wire, 0, zero, id, "refs/tags/unsupported", "side-band-64k", true)
+    # A release is created once: the same push again changes nothing.
+    try no_writes(database, wire[..<n], site)
+    n = try push_wire(wire, zero, first.tag_id, "refs/tags/v1.0.1", objects[..<0], "side-band-64k")
+    try no_writes(database, wire[..<n], site)
+    # Only the creation of a release tag is taken: no branch, no other tag, no move, no
+    # deletion, and a batch holding any of them is refused whole.
+    var second = try release("1.0.1", first.commit_id)
+    second.objects(&objects)
+    n = try push_wire(wire, zero, second.commit_id, "refs/heads/main", objects)
+    try no_writes(database, wire[..<n], site, reason = true)
+    n = try push_wire(wire, zero, second.tag_id, "refs/tags/keep", objects)
+    try no_writes(database, wire[..<n], site, reason = true)
+    n = try push_wire(wire, first.tag_id, second.tag_id, "refs/tags/v1.0.0", objects)
+    try no_writes(database, wire[..<n], site, reason = true)
+    n = try append(wire, 0, first.tag_id, zero, "refs/tags/v1.0.0", "report-status atomic", true)
     n += try git.encode_packet(git.PacketKind.flush, b"", wire[n..])
-    n += try git.encode_pack(objects[..<0], wire[n..])
-    try no_writes(database, wire[..<n])
-    var parent: u8[40]
-    _ = try git.hex_id(id, parent)
-    var commit_buffer: u8[512]
-    let second = try strings.format(commit_buffer, f"tree 4b825dc642cb6eb9a060e54bf8d69288fbee4904\nparent {(str)parent}\nauthor A\ncommitter A\n\nsecond\n")
-    var next: u8[20]
-    _ = try git.hash_object("commit", second.bytes, next)
-    objects[0] = git.Object(kind = "commit", payload = second.bytes)
-    n = try append(wire, 0, id, next, "refs/heads/main", "report-status atomic", true)
-    n = try append(wire, n, zero, id, "refs/tags/v1", "", false)
+    try no_writes(database, wire[..<n], site, reason = true)
+    n = try append(wire, 0, zero, second.tag_id, "refs/tags/v1.0.1", "report-status atomic ofs-delta", true)
+    n = try append(wire, n, zero, second.commit_id, "refs/heads/main", "", false)
     n += try git.encode_packet(git.PacketKind.flush, b"", wire[n..])
-    n += try git.encode_pack(objects[..<1], wire[n..])
-    assert(try repositories.receive_pack(database, "alice", "alice", "push", wire[..<n]) == 2)
-    try expect(database, "refs/heads/main", next)
-    try fetch_cases(database, next, id)
-    # New ref to existing data still carries a valid empty pack.
-    n = try append(wire, 0, zero, id, "refs/tags/existing", "report-status", true)
-    n += try git.encode_packet(git.PacketKind.flush, b"", wire[n..])
-    n += try git.encode_pack(objects[..<0], wire[n..])
-    assert(try repositories.receive_pack(database, "alice", "alice", "push", wire[..<n]) == 1)
-    n = try append(wire, 0, next, zero, "refs/heads/main", "report-status delete-refs atomic", true)
-    n = try append(wire, n, id, zero, "refs/tags/v1", "", false)
-    n += try git.encode_packet(git.PacketKind.flush, b"", wire[n..])
-    assert(try repositories.receive_pack(database, "alice", "alice", "push", wire[..<n]) == 2)
-    try absent(database, "refs/heads/main")
-    try absent(database, "refs/tags/v1")
+    n += try git.encode_pack(objects, wire[n..])
+    try no_writes(database, wire[..<n], site, reason = true)
+    try absent(database, "refs/tags/v1.0.1")
+    # The next release names the first commit as its parent, which is history: it is
+    # neither required nor followed, and the release still publishes.
+    n = try push_wire(wire, zero, second.tag_id, "refs/tags/v1.0.1", objects)
+    assert(try repositories.receive_pack(database, "alice", "alice", "push", wire[..<n], site) == 1)
+    try expect(database, "refs/tags/v1.0.1", second.tag_id)
+    try expect(database, "refs/tags/v1.0.0", first.tag_id)
     # Structurally valid but disconnected commit: staging may persist it, refs may not.
-    let broken = b"tree 1111111111111111111111111111111111111111\nauthor A\ncommitter A\n\nbroken\n"
-    _ = try git.hash_object("commit", broken, next)
-    objects[0] = git.Object(kind = "commit", payload = broken)
-    n = try append(wire, 0, zero, id, "refs/tags/good", "report-status atomic", true)
-    n = try append(wire, n, zero, next, "refs/heads/bad", "", false)
-    n += try git.encode_packet(git.PacketKind.flush, b"", wire[n..])
-    n += try git.encode_pack(objects[..<1], wire[n..])
+    var broken = try release("1.2.0", b"")
+    let missing_tree = b"tree 1111111111111111111111111111111111111111\nauthor A\ncommitter A\n\nbroken\n"
+    _ = try git.hash_object("commit", missing_tree, broken.commit_id)
+    var commit_text: u8[40]
+    _ = try git.hex_id(broken.commit_id, commit_text)
+    broken.tag_size = (try strings.format(broken.tag, f"object {(str)commit_text}\ntype commit\ntag v1.2.0\n\nbroken\n")).length
+    _ = try git.hash_object("tag", broken.tag[..<broken.tag_size], broken.tag_id)
+    objects[0] = git.Object(kind = "commit", payload = missing_tree)
+    objects[1] = git.Object(kind = "tag", payload = broken.tag[..<broken.tag_size])
+    n = try push_wire(wire, zero, broken.tag_id, "refs/tags/v1.2.0", objects[..<2])
     denied = false
-    _ = repositories.receive_pack(database, "alice", "alice", "push", wire[..<n]) catch:
+    _ = repositories.receive_pack(database, "alice", "alice", "push", wire[..<n], site) catch:
         denied = true
         recover 0
     assert(denied)
-    try absent(database, "refs/tags/good")
-    try absent(database, "refs/heads/bad")
-    try expect(database, "refs/tags/keep", id)
+    try absent(database, "refs/tags/v1.2.0")
 
 pub func main(arguments: str[]) -> i32!:
     assert(arguments.length == 3)
@@ -225,23 +185,26 @@ pub func main(arguments: str[]) -> i32!:
     try repositories.use_objects(arguments[1])
     defer database.release()
     if arguments[2] == "read":
-        var id: u8[20]
-        _ = try git.hash_object("commit", first, id)
-        try expect(database.value(), "refs/tags/keep", id)
-        try absent(database.value(), "refs/heads/main")
+        let first = try release("1.0.0", b"")
+        let second = try release("1.0.1", first.commit_id)
+        try expect(database.value(), "refs/tags/v1.0.0", first.tag_id)
+        try expect(database.value(), "refs/tags/v1.0.1", second.tag_id)
+        try absent(database.value(), "refs/tags/v1.2.0")
     else:
         let authority = try auth.Authority.attach(try database.value().store())
         defer authority.release()
         try authority.value().bootstrap("alice", "receive-fixture-password")
         try repositories.initialize(database.value())
         try repositories.create(database.value(), "alice", "push")
+        var site_buffer: u8[512]
+        let site = try strings.format(site_buffer, f"{arguments[1]}.site")
         if arguments[2] == "ipc":
             try database.value().listen()
             var socket_buffer: u8[512]
             let socket = try strings.format(socket_buffer, f"{arguments[1]}.sock")
             let client = try db.Database.connect(socket, "receive-test")
             defer client.release()
-            try cases(client.value())
-        else: try cases(database.value())
-    print("PASS repository receive pack validation, CAS, graph atomicity, deletion and reopen")
+            try cases(client.value(), site)
+        else: try cases(database.value(), site)
+    print("PASS repository receive: release tags only, pack validation, CAS, graph atomicity and reopen")
     return 0

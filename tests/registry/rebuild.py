@@ -69,12 +69,12 @@ with tempfile.TemporaryDirectory(prefix='registry-rebuild-', dir='/tmp') as temp
                 'lib', {'README.md': b'# lib\n![dot](dot.png)\n', 'dot.png': pixel, 'lib.lucb': b'pub let x = 1\n'}, '1.0.0')
             release(library, library_environment, '1.1.0')
             release(library, library_environment, '1.2.0')
-            code, stderr, _ = client.push(library, library_environment, 'main', 'v1.0.0', 'v1.1.0', 'v1.2.0')
+            code, stderr, _ = client.push(library, library_environment, 'v1.0.0', 'v1.1.0', 'v1.2.0')
             assert code == 0, stderr
             dependency = ('    def dependency "lib" {\n        str owner = "testadmin"\n'
                           '        str version = "^1.2.0"\n    }\n')
             application, application_environment = client.repository('app', {'README.md': b'# app\n'}, '0.1.0', dependency)
-            code, stderr, _ = client.push(application, application_environment, 'main', 'v0.1.0')
+            code, stderr, _ = client.push(application, application_environment, 'v0.1.0')
             assert code == 0, stderr
             assert (site / 'testadmin/lib/versions').read_text().count('\n') == 3
             assert (site / 'testadmin/lib/1.2.0/raw/dot.png').read_bytes() == pixel
@@ -94,9 +94,8 @@ with tempfile.TemporaryDirectory(prefix='registry-rebuild-', dir='/tmp') as temp
             assert 'no such repository' in run_admin(environment, 'withdraw', socket_path, 'testadmin/none', '1.0.0', success=False)
             output = run_admin(environment, 'withdraw', socket_path, 'testadmin/lib', '1.0.0', '1.1.0')
             assert 'withdrew testadmin/lib 1.0.0' in output and 'withdrew testadmin/lib 1.1.0' in output, output
-            advertised = request(port, 'GET', '/git/testadmin/lib/info/refs?service=git-upload-pack')[1].decode('latin-1')
+            advertised = client.discovery('lib')[1].decode('latin-1')
             assert 'refs/tags/v1.2.0' in advertised and 'refs/tags/v1.0.0' not in advertised and 'refs/tags/v1.1.0' not in advertised
-            client.clone('lib', root / 'lib-clone')
             pruned = root / 'pruned'
             pruned.mkdir()  # prepared empty, as an operator does for the site's owner and mode
             output = run_admin(environment, 'rebuild-site', socket_path, pruned)

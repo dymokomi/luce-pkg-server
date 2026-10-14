@@ -17,10 +17,6 @@ import pages
 import objects as object_files
 
 pub let max_object_bytes: usize = 67108864
-pub let max_pull_requests: usize = 256
-pub let max_pull_request_title: usize = 256
-pub let max_pull_request_body: usize = 8192
-pub let max_pull_request_branch: usize = 255
 
 ## A Prism commit is durable on its own: one write-ahead-log transaction. A bake folds
 ## the log into a new snapshot, in time proportional to the whole store, and holds the
@@ -56,35 +52,6 @@ func commit_unless_raced(tx: prism.Session*) -> bool!:
         if failure.code == prism.conflict: return false
         error(failure.code, failure.message)
     return true
-
-pub enum PullRequestState as u8:
-    unknown = 0
-    open = 1
-    closed = 2
-    merged = 3
-
-## A bounded copy of a persisted review record. Branches are short names (without
-## refs/heads/); commit IDs are the immutable tips captured at creation/merge.
-pub struct PullRequest:
-    pub var number: i64
-    pub var author: u8[32]
-    pub var author_length: usize
-    pub var title: u8[256]
-    pub var title_length: usize
-    pub var body: u8[8192]
-    pub var body_length: usize
-    pub var base: u8[255]
-    pub var base_length: usize
-    pub var head: u8[255]
-    pub var head_length: usize
-    pub var base_id: u8[20]
-    pub var head_id: u8[20]
-    pub var merge_id: u8[20]
-    pub var state: PullRequestState
-    pub var created_at: i64
-    pub var updated_at: i64
-    pub var closed_by: u8[32]
-    pub var closed_by_length: usize
 
 func valid_owner(value: str) -> bool:
     if value.length == 0 or value.length > 32: return false
@@ -344,15 +311,14 @@ func release_version(ref_name: str) -> str:
     return version
 
 pub let max_release_pack: usize = 67108864
-## Objects one graph walk, release pack or fetch may hold: a repository whose tree holds
-## more cannot be pushed, released or fetched. 4096 refused luce-browser-engine's tree.
+## Objects one graph walk or release pack may hold: a release whose tree holds more
+## cannot be pushed. 4096 refused luce-browser-engine's tree.
 pub let max_graph_objects: usize = 65536
 ## Open-addressed identity slots of a graph walk, twice its objects; a power of two.
 let graph_slots: usize = 131072
-## References one graph walk may follow: tree entries, commit trees, parents and tag
-## targets. A parent the repository does not hold ends the walk there: history is GitHub's,
-## and the registry needs only releases (a tag, its commit and that commit's tree), so a
-## release pushed without its history, or a repository trimmed to its releases, is whole.
+## References one graph walk may follow: tree entries, commit trees and tag targets. A
+## commit's parents are never followed: history is GitHub's, and the registry needs only
+## releases (a tag, its commit and that commit's tree).
 let max_graph_edges: usize = 1048576
 
 pub struct TagRelease:
@@ -498,15 +464,15 @@ func tag_release(database: db.Database*, owner: str, name: str, target: const u8
     try graph.validate(session, path)
     let objects = try new git.Object[max_graph_objects + 1] --- in memory.heap
     defer free(objects) in memory.heap
-    let leases = try new FetchLease[max_graph_objects] --- in memory.heap
+    let leases = try new ObjectLease[max_graph_objects] --- in memory.heap
     defer free(leases) in memory.heap
     var count: usize = 0
-    defer release_fetch_leases(leases, &count)
+    defer release_leases(leases, &count)
     objects[0] = commit_object
     var total = commit_object.payload.length
     for i in 0..<graph.count:
         let value = try checked_object(session, path, graph.nodes[i].id)
-        leases[count] = FetchLease(value = value)
+        leases[count] = ObjectLease(value = value)
         count += 1
         let object = try git.decode_object(value.value().bytes())
         if object.payload.length > max_release_pack - total: error(prism.invalid, "release: release source exceeds its size limit")
@@ -717,8 +683,8 @@ func rebuild_release(database: db.Database*, site_root: str, owner: str, name: s
         recover ()
 
 ## Withdraw one release: delete its tag ref, which a push can never do. Its objects stay
-## listed (the branch history still reaches them); its files leave the site with the
-## next `rebuild_site`. The newest release is refused: remove the package instead.
+## listed (`trim` drops those no other release reaches); its files leave the site with
+## the next `rebuild_site`. The newest release is refused: remove the package instead.
 pub func withdraw(database: db.Database*, owner: str, name: str, version: str) -> !:
     _ = try pkg.parse_version(version)
     var path_buffer: u8[192]
@@ -751,7 +717,7 @@ func push_capabilities(capabilities: str) -> !:
     for i in 0..<capabilities.length + 1:
         if i != capabilities.length and capabilities.bytes[i] != ' ': continue
         let capability = (str)capabilities.bytes[start..<i]
-        if capability.length != 0 and capability != "report-status" and capability != "atomic" and capability != "ofs-delta" and capability != "delete-refs" and capability != "object-format=sha1" and not strings.starts_with(capability, "agent="):
+        if capability.length != 0 and capability != "report-status" and capability != "atomic" and capability != "ofs-delta" and capability != "object-format=sha1" and not strings.starts_with(capability, "agent="):
             error(prism.invalid, "unsupported push capability")
         start = i + 1
 
@@ -775,10 +741,11 @@ func pack_base(id: const u8[], context: void*?) -> git.Object?!:
     return try git.decode_object(value.value().bytes())
 
 ## Principal must already be authenticated. This is the receive transaction core,
-## not HTTP negotiation or a report-status encoder. Validates a complete or thin
-## pack before staging objects, then atomically CAS-publishes graph-checked refs.
-## Failed staging/ref publication may leave unreferenced immutable objects; retry
-## and quota/GC policy belong to the caller. No fast-forward/signature policy yet.
+## not HTTP negotiation or a report-status encoder. A push may only create release tags
+## (`refs/tags/v<major.minor.patch>`): branches, other tags and any change to an existing
+## ref are refused before anything is stored. Validates a complete or thin pack before
+## staging objects, then atomically CAS-publishes graph-checked refs. Failed staging or
+## ref publication may leave unreferenced immutable objects, which `trim` removes.
 pub func receive_pack(database: db.Database*, principal: str, owner: str, name: str, input: const u8[], site_root: str = "") -> usize!:
     var path_buffer: u8[192]
     let path = try repo_path(principal, owner, name, path_buffer)
@@ -787,15 +754,20 @@ pub func receive_pack(database: db.Database*, principal: str, owner: str, name: 
     try require_owner(snapshot.value(), path, principal)
     let request = try git.decode_push(input)
     try push_capabilities(request.capabilities)
+    if site_root.length == 0: error(prism.invalid, "release: release publication is not configured")
     var previous: u8[1280]
     var targets: u8[1280]
     var updates: RefUpdate[64]
     for i in 0..<request.count:
         let command = try request.at(i)
-        if not valid_ref(command.name): error(prism.invalid, "unsupported push reference")
+        if not valid_ref(command.name):
+            error(prism.invalid, "release: only release tags v<major.minor.patch> can be pushed; branches and other tags belong on GitHub")
         try git.decode_id(command.old_id, previous[i * 20..<i * 20 + 20])
         try git.decode_id(command.new_id, targets[i * 20..<i * 20 + 20])
         updates[i] = RefUpdate(name = command.name, expected = previous[i * 20..<i * 20 + 20], target = targets[i * 20..<i * 20 + 20])
+        # Released tags never move and are never deleted.
+        if not zero_id(updates[i].expected) or zero_id(updates[i].target):
+            error(prism.invalid, "release: a release tag cannot be moved or deleted")
     if request.pack.length > 0:
         var bases = PackBases(session = snapshot.value(), path = path)
         defer bases.close()
@@ -827,17 +799,8 @@ pub func receive_pack(database: db.Database*, principal: str, owner: str, name: 
         try list_objects(database, path, principal, listings)
     else:
         snapshot.value().close()
-    # A version tag publishes a release. Released tags never move and are never deleted.
-    # Immutable files are written first, the refs commit, then the release is listed.
-    var releases: usize = 0
-    for i in 0..<request.count:
-        if release_version(updates[i].name).length == 0: continue
-        if not zero_id(updates[i].expected): error(prism.invalid, "release: a release tag cannot be moved or deleted")
-        if site_root.length == 0: error(prism.invalid, "release: release publication is not configured")
-        releases += 1
-    if releases == 0:
-        try update_refs(database, principal, owner, name, updates[..<request.count])
-        return request.count
+    # Each tag publishes a release: immutable files are written first, the refs commit,
+    # then the release is listed.
     let pack = try new u8[max_release_pack] --- in memory.heap
     defer free(pack) in memory.heap
     var definition: u8[65536]
@@ -846,13 +809,11 @@ pub func receive_pack(database: db.Database*, principal: str, owner: str, name: 
     var notes: u8[16384]
     for i in 0..<request.count:
         let version = release_version(updates[i].name)
-        if version.length == 0: continue
         let built = try tag_release(database, owner, name, updates[i].target, version, pack, definition, readme, notes)
         try site.publish_files(site_root, owner, name, version, pack[..<built.pack_size], definition[..<built.definition_size], notes[..<built.notes_size])
     try update_refs(database, principal, owner, name, updates[..<request.count])
     for i in 0..<request.count:
         let version = release_version(updates[i].name)
-        if version.length == 0: continue
         let built = try tag_release(database, owner, name, updates[i].target, version, pack, definition, readme, notes)
         try site.publish_listing(site_root, owner, name, version, pack[..<built.pack_size],
                                  (str)built.commit[0..], definition[..<built.definition_size], readme[..<built.readme_size],
@@ -877,8 +838,9 @@ func zero_id(id: const u8[]) -> bool:
         if byte != 0: return false
     return true
 
+## The only refs the registry writes: release tags.
 func valid_ref(name: str) -> bool:
-    return name.length <= max_ref_name and git.valid_ref(name) and (strings.starts_with(name, "refs/heads/") or strings.starts_with(name, "refs/tags/"))
+    return name.length <= max_ref_name and git.valid_ref(name) and release_version(name).length > 0
 
 func ref_path(root: str, name: str, buffer: u8[]) -> str!:
     if not valid_ref(name): error(prism.invalid, "invalid repository ref namespace or name")
@@ -888,12 +850,6 @@ func ref_path(root: str, name: str, buffer: u8[]) -> str!:
         encoded[i * 2] = digits[(usize)(name.bytes[i] >> 4)]
         encoded[i * 2 + 1] = digits[(usize)(name.bytes[i] & 15)]
     return try join([root, "/", (str)encoded[..<name.length * 2]], buffer)
-
-func prefix_conflict(left: str, right: str) -> bool:
-    if left == right: return true
-    if left.length < right.length:
-        return strings.starts_with(right, left) and right.bytes[left.length] == '/'
-    return strings.starts_with(left, right) and left.bytes[right.length] == '/'
 
 func replaced(name: str, updates: const RefUpdate[]) -> bool:
     for update in updates:
@@ -929,15 +885,10 @@ struct GraphNode:
     ## A ref target the repository already held: validated, with all it reaches, when
     ## its own push landed, so a walk stops there.
     var trusted: bool
-    ## Reached only as a commit's parent, so it may be absent (see `max_graph_edges`).
-    var parent: bool
-    ## A parent the repository does not hold: the walk stopped there and sends nothing.
-    var absent: bool
 
-pub let receive_capabilities = "report-status delete-refs atomic ofs-delta object-format=sha1"
-pub let fetch_capabilities = "ofs-delta no-progress object-format=sha1"
+pub let receive_capabilities = "report-status atomic ofs-delta object-format=sha1"
 
-## Follow annotated tags only, with a shared discovery/authorization byte budget.
+## Follow annotated tags only, within a byte budget.
 func peel(session: prism.Session*, path: str, id: const u8[], output: u8[], budget: usize*) -> bool!:
     for i in 0..<(usize)20: output[i] = id[i]
     var expected: u8 = 0
@@ -959,91 +910,33 @@ func peel(session: prism.Session*, path: str, id: const u8[], output: u8[], budg
         peeled = true
     error(prism.invalid, "invalid tag chain")
 
-struct AdvertisementRef:
-    var name: u8[1024]
-    var length: usize
-    var id: u8[20]
-
-func before(left: str, right: str) -> bool:
-    let count = left.length if left.length < right.length else right.length
-    for i in 0..<count:
-        if left.bytes[i] != right.bytes[i]: return left.bytes[i] < right.bytes[i]
-    return left.length < right.length
-
-## Smart HTTP v0 discovery from one authenticated snapshot. Discard output on
-## failure. Upload discovery includes peeled tags and fixed main-branch HEAD.
-pub func advertise_receive(database: db.Database*, principal: str, owner: str, name: str, output: u8[], upload: bool = false) -> usize!:
+## Smart HTTP v0 receive discovery from one authenticated snapshot: the release tags a
+## push may build on, oldest version first. Discard output on failure.
+pub func advertise_receive(database: db.Database*, principal: str, owner: str, name: str, output: u8[]) -> usize!:
     var path_buffer: u8[192]
     let path = try repo_path(principal, owner, name, path_buffer)
-    var root_buffer: u8[208]
-    let root = try join([path, "/refs"], root_buffer)
     let snapshot = try database.snapshot()
     defer snapshot.release()
     try require_owner(snapshot.value(), path, principal)
-    let children = try snapshot.value().children(root)
-    defer children.release()
-    let count = children.value().count()
-    if count > max_refs: error(prism.invalid, "stored ref count exceeds limit")
-    let entries = try new AdvertisementRef[1024] --- in memory.heap
-    defer free(entries) in memory.heap
-    var order: usize[1024]
-    for i in 0..<count:
-        let child = try children.value().at(i)
-        let label = try snapshot.value().get(child, "name")
-        defer label.release()
-        let ref_name = try label.value().text_at()
-        if not valid_ref(ref_name): error(prism.invalid, "invalid advertised ref")
-        var expected_buffer: u8[2304]
-        if try ref_path(root, ref_name, expected_buffer) != child: error(prism.invalid, "stored ref path mismatch")
-        let value = try read_ref(snapshot.value(), child, ref_name)
-        defer value.release()
-        entries[i] = AdvertisementRef(length = ref_name.length)
-        for j in 0..<ref_name.length: entries[i].name[j] = ref_name.bytes[j]
-        for j in 0..<(usize)20: entries[i].id[j] = value.value().bytes()[j]
-        var at = i
-        while at > 0:
-            let previous = order[at - 1]
-            if not before(ref_name, (str)entries[previous].name[..<entries[previous].length]): break
-            order[at] = previous
-            at -= 1
-        order[at] = i
-    var used = try git.encode_packet(git.PacketKind.data, b"# service=git-upload-pack\n" if upload else b"# service=git-receive-pack\n", output)
+    let tags = try new ReleaseTag[max_refs] --- in memory.heap
+    defer free(tags) in memory.heap
+    let count = try release_tags(snapshot.value(), path, tags)
+    var used = try git.encode_packet(git.PacketKind.data, b"# service=git-receive-pack\n", output)
     used += try git.encode_packet(git.PacketKind.flush, b"", output[used..])
-    var line: u8[1200]
-    var has_head = false
-    if upload:
-        for i in 0..<count:
-            let entry = &entries[i]
-            if (str)entry.name[..<entry.length] != "refs/heads/main": continue
-            var encoded: u8[40]
-            _ = try git.hex_id(entry.id, encoded)
-            let text = try strings.format(line, f"{(str)encoded} HEAD\0{fetch_capabilities} symref=HEAD:refs/heads/main\n")
-            used += try git.encode_packet(git.PacketKind.data, text.bytes, output[used..])
-            has_head = true
-    let offered = fetch_capabilities if upload else receive_capabilities
+    var line: u8[256]
     if count == 0:
-        let text = try strings.format(line, f"0000000000000000000000000000000000000000 capabilities^{{}}\0{offered}\n")
+        let text = try strings.format(line, f"0000000000000000000000000000000000000000 capabilities^{{}}\0{receive_capabilities}\n")
         used += try git.encode_packet(git.PacketKind.data, text.bytes, output[used..])
-    var peel_budget: usize = 67108864
     for i in 0..<count:
-        let entry = &entries[order[i]]
         var encoded: u8[40]
-        _ = try git.hex_id(entry.id, encoded)
-        let separator = "\0" if i == 0 and not has_head else ""
-        let capabilities = offered if i == 0 and not has_head else ""
-        let text = try strings.format(line, f"{(str)encoded} {(str)entry.name[..<entry.length]}{separator}{capabilities}\n")
+        _ = try git.hex_id(tags[i].target, encoded)
+        # The first line carries the capabilities.
+        let separator = "\0" if i == 0 else ""
+        let capabilities = receive_capabilities if i == 0 else ""
+        let text = try strings.format(line, f"{(str)encoded} refs/tags/v{tags[i].version()}{separator}{capabilities}\n")
         used += try git.encode_packet(git.PacketKind.data, text.bytes, output[used..])
-        if upload and strings.starts_with((str)entry.name[..<entry.length], "refs/tags/"):
-            var target: u8[20]
-            if try peel(snapshot.value(), path, entry.id, target, &peel_budget):
-                _ = try git.hex_id(target, encoded)
-                let peeled = try strings.format(line, f"{(str)encoded} {(str)entry.name[..<entry.length]}^{{}}\n")
-                used += try git.encode_packet(git.PacketKind.data, peeled.bytes, output[used..])
     used += try git.encode_packet(git.PacketKind.flush, b"", output[used..])
     return used
-
-pub func advertise_upload(database: db.Database*, principal: str, owner: str, name: str, output: u8[]) -> usize!:
-    return try advertise_receive(database, principal, owner, name, output, true)
 
 func kind_code(kind: str) -> u8!:
     if kind == "blob": return 1
@@ -1058,9 +951,6 @@ struct Graph:
     var count: usize
     var edges: usize
     var probes: usize
-    ## Whether a commit's parents are followed: false for what a release alone reaches
-    ## (`trim`), which keeps history out.
-    var history: bool = true
 
     func contains(id: const u8[]) -> bool!:
         var bucket: usize = 0
@@ -1073,9 +963,7 @@ struct Graph:
             if same(self.nodes[slot - 1].id, id): return true
             bucket = (bucket + 1) & (graph_slots - 1)
 
-    ## Add `id` to the walk; `parent` when only a commit's parent names it, which lets it be
-    ## absent. Any other reference requires it.
-    func add(id: const u8[], kind: u8, parent: bool = false) -> !:
+    func add(id: const u8[], kind: u8) -> !:
         if id.length != 20 or zero_id(id): error(prism.invalid, "invalid graph identity")
         self.edges += 1
         if self.edges > max_graph_edges: error(prism.invalid, "graph edge limit exceeded")
@@ -1087,7 +975,7 @@ struct Graph:
             let slot = self.slots[bucket]
             if slot == 0:
                 if self.count >= self.nodes.length: error(prism.invalid, "graph object limit exceeded")
-                self.nodes[self.count] = GraphNode(kind = kind, parent = parent)
+                self.nodes[self.count] = GraphNode(kind = kind)
                 for i in 0..<(usize)20: self.nodes[self.count].id[i] = id[i]
                 self.count += 1
                 self.slots[bucket] = self.count
@@ -1096,9 +984,6 @@ struct Graph:
                 let expected = self.nodes[slot - 1].kind
                 if kind != 0 and expected != 0 and kind != expected: error(prism.invalid, "graph object type conflict")
                 if expected == 0: self.nodes[slot - 1].kind = kind
-                if not parent:
-                    if self.nodes[slot - 1].absent: error(prism.missing, "Git object is not in this repository")
-                    self.nodes[slot - 1].parent = false
                 return
             bucket = (bucket + 1) & (graph_slots - 1)
 
@@ -1107,39 +992,6 @@ struct Graph:
         if try self.contains(id): return
         try self.add(id, 0)
         self.nodes[self.count - 1].trusted = true
-
-    ## Trust the history of every trusted node: the commits and tags its parents and tag
-    ## targets reach. Only those small objects are read, never trees or blobs, so a push
-    ## whose merge reaches an old fork point still stops at history already published.
-    ## History the repository does not hold (see `max_graph_edges`) ends it there.
-    func trust_history(session: prism.Session*, path: str) -> !:
-        var at: usize = 0
-        while at < self.count:
-            let trusted = self.nodes[at].trusted
-            var id: u8[20]
-            for i in 0..<(usize)20: id[i] = self.nodes[at].id[i]
-            at += 1
-            if not trusted: continue
-            let value = checked_object(session, path, id) catch failure:
-                if failure.code == prism.missing: continue
-                error(failure.code, failure.message)
-            defer value.release()
-            let object = try git.decode_object(value.value().bytes())
-            if object.kind == "commit":
-                let commit = try git.decode_commit(object.payload)
-                for i in 0..<commit.parent_count:
-                    var parent: u8[20]
-                    try git.decode_id(try commit.parent(i), parent)
-                    try self.trust(parent)
-            elif object.kind == "tag":
-                var target: u8[20]
-                try git.decode_id(try git.decode_tag(object.payload).object, target)
-                try self.trust(target)
-
-    ## Add a commit's parent: walked like any commit when the repository holds it, and
-    ## where it does not, the end of the history the registry keeps.
-    func add_parent(id: const u8[]) -> !:
-        try self.add(id, 3, parent = true)
 
     func add_hex(id: str, kind: u8) -> !:
         var bytes: u8[20]
@@ -1153,11 +1005,7 @@ struct Graph:
             if self.nodes[at].trusted:
                 at += 1
                 continue
-            let value = checked_object(session, path, self.nodes[at].id) catch failure:
-                if failure.code != prism.missing or not self.nodes[at].parent: error(failure.code, failure.message)
-                self.nodes[at].absent = true
-                at += 1
-                continue
+            let value = try checked_object(session, path, self.nodes[at].id)
             defer value.release()
             let bytes = value.value().bytes()
             if bytes.length > 268435456 - total: error(prism.invalid, "graph byte limit exceeded")
@@ -1175,12 +1023,8 @@ struct Graph:
                     if entry.mode != "160000": try self.add(entry.id, 2 if entry.mode == "40000" else 1)
                     offset += entry.consumed
             elif actual == 3:
-                let commit = try git.decode_commit(object.payload)
-                try self.add_hex(commit.tree, 2)
-                for i in 0..<(commit.parent_count if self.history else 0):
-                    var parent: u8[20]
-                    try git.decode_id(try commit.parent(i), parent)
-                    try self.add_parent(parent)
+                # Parents are history, which GitHub keeps: a release is its tag, commit and tree.
+                try self.add_hex((try git.decode_commit(object.payload)).tree, 2)
             elif actual == 4:
                 let tag = try git.decode_tag(object.payload)
                 try self.add_hex(tag.object, try kind_code(tag.kind))
@@ -1195,123 +1039,18 @@ struct Graph:
             if try kind_code(try git.decode_object(held.value().bytes()).kind) != self.nodes[i].kind:
                 error(prism.invalid, "graph target type mismatch")
 
-struct FetchLease:
+## An object a release pack borrows until the pack is encoded.
+struct ObjectLease:
     var value: interop.Reference[prism.Value]?
 
-func release_fetch_leases(leases: FetchLease[], count: usize*):
+func release_leases(leases: ObjectLease[], count: usize*):
     for i in 0..<*count:
         if let lease = leases[i].value: lease.release()
 
-## Native upload-pack core. Discard output on error. Principal is verified by
-## transport. Only advertised ref tips/peeled targets; no arbitrary-ID reads.
-## No shallow/filter/side-band/multi-ACK negotiation is advertised by this core.
-pub func upload_pack(database: db.Database*, principal: str, owner: str, name: str, input: const u8[], output: u8[]) -> usize!:
-    var path_buffer: u8[192]
-    let path = try repo_path(principal, owner, name, path_buffer)
-    let snapshot = try database.snapshot()
-    defer snapshot.release()
-    let session = snapshot.value()
-    try require_owner(session, path, principal)
-    let request = try git.decode_fetch(input)
-    var start: usize = 0
-    for i in 0..<(request.capabilities.length + 1 if request.capabilities.length > 0 else 0):
-        if i != request.capabilities.length and request.capabilities.bytes[i] != ' ': continue
-        let token = (str)request.capabilities.bytes[start..<i]
-        if token.length != 0 and token != "ofs-delta" and token != "no-progress" and token != "object-format=sha1" and not strings.starts_with(token, "agent="):
-            error(prism.invalid, "unsupported fetch capability")
-        start = i + 1
-    if request.wants == 0: return 0
-    let nodes = try new GraphNode[max_graph_objects] --- in memory.heap
-    defer free(nodes) in memory.heap
-    let slots = try new usize[graph_slots] --- in memory.heap
-    defer free(slots) in memory.heap
-    let common_nodes = try new GraphNode[max_graph_objects] --- in memory.heap
-    defer free(common_nodes) in memory.heap
-    let common_slots = try new usize[graph_slots] --- in memory.heap
-    defer free(common_slots) in memory.heap
-    for i in 0..<slots.length:
-        slots[i] = 0
-        common_slots[i] = 0
-    var wanted = Graph(nodes = nodes, slots = slots)
-    var common = Graph(nodes = common_nodes, slots = common_slots)
-    var ids: u8[20480]
-    var authorized: bool[1024]
-    for i in 0..<request.wants:
-        try git.decode_id(try request.want(i), ids[i * 20..<i * 20 + 20])
-    var root_buffer: u8[208]
-    let root = try join([path, "/refs"], root_buffer)
-    let children = try session.children(root)
-    defer children.release()
-    if children.value().count() > max_refs: error(prism.invalid, "stored ref count exceeds limit")
-    var peel_budget: usize = 67108864
-    for i in 0..<children.value().count():
-        let child = try children.value().at(i)
-        let label = try session.get(child, "name")
-        defer label.release()
-        let ref_name = try label.value().text_at()
-        var location_buffer: u8[2304]
-        if try ref_path(root, ref_name, location_buffer) != child: error(prism.invalid, "stored ref path mismatch")
-        let ref = try read_ref(session, child, ref_name)
-        defer ref.release()
-        for j in 0..<request.wants:
-            if same(ref.value().bytes(), ids[j * 20..<j * 20 + 20]): authorized[j] = true
-        if strings.starts_with(ref_name, "refs/tags/"):
-            var target: u8[20]
-            if try peel(session, path, ref.value().bytes(), target, &peel_budget):
-                for j in 0..<request.wants:
-                    if same(target, ids[j * 20..<j * 20 + 20]): authorized[j] = true
-    for i in 0..<request.wants:
-        if not authorized[i]: error(prism.invalid, "fetch want was not advertised")
-        try wanted.add(ids[i * 20..<i * 20 + 20], 0)
-    try wanted.validate(session, path)
-    var acknowledged: u8[20]
-    var have_common = false
-    for i in 0..<request.haves:
-        var id: u8[20]
-        try git.decode_id(try request.have(i), id)
-        # Only commits in the wanted closure are negotiation bases. Unknown or
-        # unrelated haves reveal nothing about other stored objects.
-        if not try wanted.contains(id): continue
-        let value = try checked_object(session, path, id)
-        defer value.release()
-        if (try git.decode_object(value.value().bytes())).kind != "commit": continue
-        try common.add(id, 3)
-        for j in 0..<(usize)20: acknowledged[j] = id[j]
-        have_common = true
-    var used: usize = 0
-    if have_common:
-        var encoded: u8[40]
-        _ = try git.hex_id(acknowledged, encoded)
-        var buffer: u8[64]
-        let line = try strings.format(buffer, f"ACK {(str)encoded}\n")
-        used = try git.encode_packet(git.PacketKind.data, line.bytes, output)
-    else:
-        used = try git.encode_packet(git.PacketKind.data, b"NAK\n", output)
-    if not request.done: return used
-    try common.validate(session, path)
-    let objects = try new git.Object[max_graph_objects] --- in memory.heap
-    defer free(objects) in memory.heap
-    let leases = try new FetchLease[max_graph_objects] --- in memory.heap
-    defer free(leases) in memory.heap
-    var count: usize = 0
-    defer release_fetch_leases(leases, &count)
-    var total: usize = 0
-    for i in 0..<wanted.count:
-        if wanted.nodes[i].absent or try common.contains(wanted.nodes[i].id): continue
-        let value = try checked_object(session, path, wanted.nodes[i].id)
-        leases[count] = FetchLease(value = value)
-        count += 1
-        let object = try git.decode_object(value.value().bytes())
-        if object.payload.length > 67108864 - total: error(prism.invalid, "fetch object byte limit exceeded")
-        total += object.payload.length
-        objects[count - 1] = object
-    used += try git.encode_pack(objects[..<count], output[used..])
-    return used
-
-## Atomic CAS of every ref in the batch, including cross-ref prefix checks.
-## Shared guard writes serialize competing batches, since Prism detects write
-## overlaps, not read predicates. Graph closure is checked in the transaction's
-## snapshot. No fast-forward policy, identity/date fsck or signature verification.
+## Atomic CAS of every release tag in the batch: creation (all-zero expected) for a push,
+## deletion (all-zero target) for `withdraw`. Shared guard writes serialize competing
+## batches, since Prism detects write overlaps, not read predicates. Graph closure is
+## checked in the transaction's snapshot. No identity/date fsck or signature verification.
 pub func update_refs(database: db.Database*, principal: str, owner: str, name: str, updates: const RefUpdate[]) -> !:
     var path_buffer: u8[192]
     let path = try repo_path(principal, owner, name, path_buffer)
@@ -1323,8 +1062,6 @@ pub func update_refs(database: db.Database*, principal: str, owner: str, name: s
         if zero_id(update.expected) and zero_id(update.target): error(prism.invalid, "empty ref update")
         for j in 0..<i:
             if updates[j].name == update.name: error(prism.invalid, "duplicate ref update")
-            if not zero_id(update.target) and not zero_id(updates[j].target) and prefix_conflict(update.name, updates[j].name):
-                error(prism.conflict, "ref prefix conflict")
     for attempt in 0..<commit_attempts:
         if try apply_refs(database, path, principal, updates): return
     error(prism.conflict, "ref update kept meeting concurrent writes")
@@ -1352,17 +1089,14 @@ func apply_refs(database: db.Database*, path: str, principal: str, updates: cons
         let label = try tx.value().get(child, "name")
         defer label.release()
         let current = try label.value().text_at()
-        if not valid_ref(current): error(prism.invalid, "invalid stored ref name")
-        # what the repository's refs reach was checked when they were published: the walk
-        # below covers the pushed objects only, not the whole history again
+        # What the repository's refs reach was checked when they were published (a branch
+        # a store holds from before releases only, until `trim`, too): the walk below
+        # covers the pushed objects only.
         let held = try read_ref(tx.value(), child, current)
         defer held.release()
         try graph.trust(held.value().bytes())
         if replaced(current, updates): continue
         retained += 1
-        for update in updates:
-            if not zero_id(update.target) and prefix_conflict(current, update.name): error(prism.conflict, "ref prefix conflict")
-    try graph.trust_history(tx.value(), path)
     for update in updates:
         var location_buffer: u8[2304]
         let location = try ref_path(root, update.name, location_buffer)
@@ -1374,7 +1108,7 @@ func apply_refs(database: db.Database*, path: str, principal: str, updates: cons
             error(prism.conflict, "expected ref is missing")
         if not zero_id(update.target):
             retained += 1
-            try graph.add(update.target, 3 if strings.starts_with(update.name, "refs/heads/") else 0)
+            try graph.add(update.target, 0)
     if retained > max_refs: error(prism.invalid, "repository ref limit exceeded")
     try graph.validate(tx.value(), path)
     if not try tx.value().contains(root): try tx.value().add(root, "directory")
@@ -1400,8 +1134,7 @@ func apply_refs(database: db.Database*, path: str, principal: str, updates: cons
 
 ## What `remove` took out of the database and the object files.
 pub struct Removal:
-    ## Branches and ordinary tags, then release tags (`refs/tags/v<version>`).
-    pub var refs: usize
+    ## Release tags (`refs/tags/v<version>`).
     pub var releases: usize
     ## Objects the repository listed; of those, files deleted and files kept because
     ## another repository lists the same id.
@@ -1411,8 +1144,8 @@ pub struct Removal:
 
 ## Remove `owner/name` from the database: its record, refs and object listings in one
 ## transaction (removing the repository element removes everything below it), then the
-## object files no other repository lists. Pull requests and credentials hold no state
-## under the repository. The site's files are `site.remove_package`'s job.
+## object files no other repository lists. Credentials hold no state under the
+## repository. The site's files are `site.remove_package`'s job.
 ##
 ## Operator-only: `luce-pkg-admin remove`. Online, a push to another repository that
 ## lists one of these ids in the moment between the check and the deletion would find
@@ -1439,10 +1172,7 @@ pub func remove(database: db.Database*, owner: str, name: str) -> Removal!:
             for i in 0..<refs.value().count():
                 let label = try session.get(try refs.value().at(i), "name")
                 defer label.release()
-                if release_version(try label.value().text_at()).length > 0:
-                    result.releases += 1
-                else:
-                    result.refs += 1
+                if release_version(try label.value().text_at()).length > 0: result.releases += 1
         let listed = try session.children(objects_root)
         defer listed.release()
         result.objects = listed.value().count()
@@ -1559,7 +1289,7 @@ pub func trim(database: db.Database*, owner: str, name: str) -> Trimmed!:
         let slots = try new usize[graph_slots] --- in memory.heap
         defer free(slots) in memory.heap
         for i in 0..<slots.length: slots[i] = 0
-        var graph = Graph(nodes = nodes, slots = slots, history = false)
+        var graph = Graph(nodes = nodes, slots = slots)
         if try session.contains(refs_root):
             let refs = try session.children(refs_root)
             defer refs.release()

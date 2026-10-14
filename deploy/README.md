@@ -149,9 +149,11 @@ sudo systemctl daemon-reload && sudo systemctl enable --now luce-pkg-checkpoint.
 The registry is for installing and updating; GitHub keeps every package's history.
 `luc publish` sends one snapshot per release: HEAD's files without the development paths
 (`tests`, `dev`, and those package.prisma declares), as a parentless commit whose message
-names HEAD (`Source-Commit:`), under the release tag alone, with no branch. The `versions`
-listing then reads `version sha256 commit source`: the commit the release pack holds, then
-the GitHub commit it was made from. A walk stops at a parent the repository does not hold.
+names HEAD (`Source-Commit:`), under the release tag alone. The registry refuses any other
+push: a branch, another tag, or a change to an existing tag. The `versions` listing then
+reads `version sha256 commit source`: the commit the release pack holds, then the GitHub
+commit it was made from. A commit's parents are never needed or followed. Nothing is
+served to clone or fetch: installs read the static files.
 
 A repository pushed the older way, branches and history included, is reduced to its
 releases offline; `--all` takes every package in the site's index:
@@ -205,8 +207,8 @@ old directory, and once that is deleted, publishes fail with "the file could not
 opened".
 
 `withdraw` deletes each version's tag; the newest release of a package always
-stays (remove the package to drop it). The objects stay, since the branch history
-still reaches them. A `luc.lock` that pinned a withdrawn version no longer
+stays (remove the package to drop it). The objects stay listed until `trim` drops those
+no other release reaches. A `luc.lock` that pinned a withdrawn version no longer
 resolves. `rebuild-site` writes into a new or empty directory and refuses one that
 already holds a site; a push between the rebuild and the restart lands in the old
 site, so pause pushes or rebuild again.
@@ -249,6 +251,6 @@ restored separately from protected operator custody.
 
 Every upgrade follows the same shape: backup, install an immutable release, stop,
 offline checkpoint/open with the new admin binary, change the `current` symlink,
-start, then run health, registration, stock-Git, signed-release and `luc` download
+start, then run health, registration, stock-Git release push and `luc` download
 checks. Rollback restores both the previous binary link and its matching backup;
 never assume a newer on-disk encoding is readable by an older release.

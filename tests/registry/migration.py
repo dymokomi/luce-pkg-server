@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Migration round trip: a database in the former layout (objects inside Prism, inline
 and chunked) is migrated to object files; the migration is idempotent and resumable;
-the migrated registry serves a fresh clone, keeps its account, and publishes a release
-built from migrated objects."""
+the migrated registry keeps its account and publishes a release built from migrated
+objects, byte for byte."""
+import base64
 import http.client
 import json
 import os
@@ -116,12 +117,6 @@ with tempfile.TemporaryDirectory(prefix='registry-migration-', dir='/tmp') as te
                     pass
                 assert time.monotonic() < deadline, 'registry startup timeout'
                 time.sleep(.05)
-            endpoint = f'http://127.0.0.1:{port}/git/testadmin/legacy'
-            clone = root / 'clone'
-            subprocess.run(['git', 'clone', '-q', endpoint, str(clone)], env=git_env, check=True, capture_output=True, timeout=300)
-            git('fsck', '--strict', cwd=clone)
-            assert (clone / 'large.bin').read_bytes() == large and git('rev-parse', 'HEAD', cwd=clone).strip().decode() == head
-            print('PASS a fresh clone of a migrated repository is byte for byte', flush=True)
             # The account moved too: log in, and publish a release from migrated objects.
             status, session = request(port, 'POST', '/v1/sessions', {'name': 'testadmin', 'password': 'fixture-password'})
             assert status == 200, status
@@ -129,13 +124,22 @@ with tempfile.TemporaryDirectory(prefix='registry-migration-', dir='/tmp') as te
                                          {'scope': 'git:write', 'repository': 'legacy', 'lifetime_seconds': 3600},
                                          {'Authorization': 'Bearer ' + session.decode()})
             assert status == 201
-            askpass = root / 'askpass.sh'
-            askpass.write_text('#!/bin/sh\ncase "$1" in\n  *Username*) echo testadmin ;;\n  *) printf "%s\\n" "$T" ;;\nesac\n')
-            askpass.chmod(0o700)
-            git_env.update(GIT_ASKPASS=str(askpass), T=credential.decode())
+            # The push carries the tag alone: the commit, its tree and the large blob are
+            # the migrated objects.
             git('tag', '-a', 'v1.0.0', '-m', 'Released after migration.')
-            git('remote', 'add', 'origin', endpoint)
-            git('push', 'origin', 'v1.0.0')
+            tag = git('rev-parse', 'v1.0.0').strip()
+            command = b'0' * 40 + b' ' + tag + b' refs/tags/v1.0.0\0 report-status'
+            wire = f'{len(command) + 4:04x}'.encode() + command + b'0000' + git('pack-objects', '--stdout', input=tag + b'\n')
+            connection = http.client.HTTPConnection('127.0.0.1', port, timeout=300)
+            try:
+                basic = base64.b64encode(b'testadmin:' + credential).decode()
+                connection.request('POST', '/git/testadmin/legacy/git-receive-pack', wire,
+                                   {'Authorization': 'Basic ' + basic, 'Content-Type': 'application/x-git-receive-pack-request'})
+                response = connection.getresponse()
+                report = response.read()
+            finally:
+                connection.close()
+            assert response.status == 200 and b'ok refs/tags/v1.0.0\n' in report, report
             released = root / 'site/testadmin/legacy/1.0.0.pack'
             unpacked = root / 'unpacked'
             subprocess.run(['git', 'init', '-q', str(unpacked)], env=git_env, check=True, timeout=30)

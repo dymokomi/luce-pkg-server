@@ -1,9 +1,10 @@
 # The registry server and its admin tool, built from src/, driven by independent Python
 # clients: accounts and Git over HTTP (check_accounts.py), the admin commands (admin.py),
-# the deployment scripts (deployment.py), storage, removal, trimming to releases, the site rebuilt from the
-# database, migration of a legacy store, and a release published by luc built from the
-# luce-luc checkout beside this one (publish.py). The fixtures under drivers/ seed the
-# stores. They build optimised, as the old gate did: publish.py moves a 72 MiB release.
+# the deployment scripts (deployment.py), storage, removal, trimming a legacy store to its
+# releases, the site rebuilt from the database, migration of a legacy store, and a release
+# published by luc built from the luce-luc checkout beside this one (publish.py). The
+# fixtures under drivers/ seed the stores. They build optimised, as the old gate did:
+# storage.py and publish.py move releases of tens of MiB.
 # `luc test` runs this with LUCE_BASE naming the compiler.
 from luce_std import files, paths, process
 
@@ -32,7 +33,7 @@ pub func main(arguments: list[str]) -> int!:
     build(base, paths.join(paths.directory(top), "luce-luc/src/main.lucb"), luc, here)
     let checks = [["check_accounts.py", registry, account], ["admin.py", admin, registry],
         ["deployment.py", admin], ["storage.py", registry, admin, account],
-        ["remove.py", registry, admin, account], ["trim.py", registry, admin, account],
+        ["remove.py", registry, admin, account], ["trim.py", registry, admin, legacy],
         ["rebuild.py", registry, admin, account],
         ["migration.py", registry, admin, legacy], ["publish.py", registry, account, luc]]
     for words in checks:

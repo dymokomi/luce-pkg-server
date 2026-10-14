@@ -17,7 +17,7 @@ import tempfile
 import threading
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from registry_client import Client, request, start, stop, free_port  # noqa: E402
+from registry_client import Client, released, request, start, stop, free_port  # noqa: E402
 
 registry, admin, fixture = [Path(value).resolve() for value in sys.argv[1:4]]
 TOKEN = 'integration-store-token'
@@ -80,7 +80,7 @@ with tempfile.TemporaryDirectory(prefix='registry-remove-', dir='/tmp') as tempo
             }
             for name, (files, extra) in packages.items():
                 work, git_environment = client.repository(name, files, '1.0.0', extra)
-                code, stderr, _ = client.push(work, git_environment, 'main', 'v1.0.0')
+                code, stderr, _ = client.push(work, git_environment, 'v1.0.0')
                 assert code == 0, (name, stderr)
             for name in packages:
                 assert page(f'/testadmin/{name}/')[0] == 200
@@ -96,11 +96,11 @@ with tempfile.TemporaryDirectory(prefix='registry-remove-', dir='/tmp') as tempo
             print('PASS removal is refused for a dependency and an unknown package', flush=True)
 
             removed = remove(environment, socket_path, 'testadmin/gone', '--force')
-            assert 'removed repository testadmin/gone: 1 release tags, 1 other refs' in removed, removed
+            assert 'removed repository testadmin/gone: 1 release tags, ' in removed, removed
             assert '1 shared with other repositories kept' in removed, removed
             assert 'its directory with 1 releases' in removed, removed
             # Repository, Git API, release files and pages are gone.
-            assert request(port, 'GET', '/git/testadmin/gone/info/refs?service=git-upload-pack')[0] == 404
+            assert client.discovery('gone')[0] == 404
             for path in ('/testadmin/gone/', '/testadmin/gone/versions', '/testadmin/gone/1.0.0.pack',
                          '/testadmin/gone/1.0.0.prisma', '/testadmin/gone/1.0.0/tree/'):
                 assert page(path)[0] == 404, path
@@ -128,11 +128,11 @@ with tempfile.TemporaryDirectory(prefix='registry-remove-', dir='/tmp') as tempo
             else:
                 print('SKIP luc check: no luc binary', flush=True)
 
-            # The other packages are intact: clone, fsck, release files and page.
-            client.clone('keep', root / 'keep-clone')
-            assert (root / 'keep-clone/README.md').read_bytes() == shared
+            # The other packages are intact: repository, release files and page.
+            assert released(site, 'testadmin/keep', '1.0.0', 'README.md') == shared
             assert page('/testadmin/keep/')[0] == 200 and page('/testadmin/keep/1.0.0.pack')[0] == 200
-            assert request(port, 'GET', '/git/testadmin/keep/info/refs?service=git-upload-pack')[0] == 200
+            status, advertisement = client.discovery('keep')
+            assert status == 200 and b'refs/tags/v1.0.0' in advertisement, advertisement
             # The name is free again.
             assert request(port, 'POST', '/v1/repositories', {'name': 'gone'}, client.session)[0] == 201
             print('PASS online removal: repository, objects, release files and pages gone; the rest intact', flush=True)
@@ -148,8 +148,8 @@ with tempfile.TemporaryDirectory(prefix='registry-remove-', dir='/tmp') as tempo
         assert not (site / 'testadmin/consumer').exists()
         process = start(registry, database, port, environment, log)
         try:
-            assert request(port, 'GET', '/git/testadmin/consumer/info/refs?service=git-upload-pack')[0] == 404
-            client.clone('keep', root / 'keep-after-restart')
+            assert client.discovery('consumer')[0] == 404
+            assert b'refs/tags/v1.0.0' in client.discovery('keep')[1]
             index = (site / 'index').read_text()
             assert index.startswith('testadmin/keep\t') and index.count('\n') == 1, index
         finally:

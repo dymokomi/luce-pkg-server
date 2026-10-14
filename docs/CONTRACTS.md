@@ -8,18 +8,19 @@ Owner decision, September 21, 2026:
 
 - Every repository, package and release on `pkg.luciaos.com` is **public**. There
   is no private package, no visibility flag and no per-reader ACL.
-- Browsing, search, Git clone/fetch, version listing, release download and
-  `luc` installation require **no account and no credential**.
+- Browsing, search, version listing, release download and `luc` installation
+  require **no account and no credential**. They read static files; the registry
+  serves no Git clone or fetch, since GitHub keeps every package's history.
 - An account is required only for operations that change state: repository
-  creation, Git push, pull-request creation and state changes, signing-key
-  enrollment and release publication. Registration stays invite-only.
+  creation and release publication by Git push. Registration stays invite-only.
 - `dymokomi` is the only account for now. Collaborator roles remain later work.
-- A release is a pushed tag `v<major.minor.patch>` whose commit carries a root
-  `package.prisma` naming this owner, this repository and this version. The
-  registry publishes it as static files (a history-free Git pack, the package
-  definition, a per-package `versions` listing with SHA-256 digests, and a global
-  `index`). Released tags cannot be moved or deleted. The tag must be annotated:
-  its message is the mandatory release notes.
+- A push may only create release tags. A release is a pushed tag
+  `v<major.minor.patch>` whose commit carries a root `package.prisma` naming this
+  owner, this repository and this version. The registry publishes it as static
+  files (a history-free Git pack, the package definition, a per-package `versions`
+  listing with SHA-256 digests, and a global `index`). Released tags cannot be
+  moved or deleted. The tag must be annotated: its message is the mandatory
+  release notes.
 - Integrity is the SHA-256 recorded in `luc.lock` plus HTTPS. Publisher
   signatures, signing-key enrollment and the separate publish protocol are
   dropped; they may return later as an additional file without changing this model.

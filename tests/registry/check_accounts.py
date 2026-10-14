@@ -112,14 +112,14 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             assert status == 200 and len(token) == 32, (status, token)
             headers = {'Authorization': 'Bearer ' + token.decode(), 'X-Forwarded-For': '8.8.8.8'}
             for value in ({}, {'scope': 'git:admin', 'repository': 'demo', 'lifetime_seconds': 60},
-                          {'scope': 'git:read', 'repository': '../escape', 'lifetime_seconds': 60},
-                          {'scope': 'git:read', 'repository': 'demo', 'lifetime_seconds': 59},
-                          {'scope': 'git:read', 'repository': 'demo', 'lifetime_seconds': 7776001},
-                          {'scope': 'git:read', 'repository': 'demo', 'lifetime_seconds': '3600'},
-                          {'scope': 'git:read', 'repository': 'demo', 'lifetime_seconds': 60, 'extra': 1}):
+                          {'scope': 'git:write', 'repository': '../escape', 'lifetime_seconds': 60},
+                          {'scope': 'git:write', 'repository': 'demo', 'lifetime_seconds': 59},
+                          {'scope': 'git:write', 'repository': 'demo', 'lifetime_seconds': 7776001},
+                          {'scope': 'git:write', 'repository': 'demo', 'lifetime_seconds': '3600'},
+                          {'scope': 'git:write', 'repository': 'demo', 'lifetime_seconds': 60, 'extra': 1}):
                 assert request(port, 'POST', '/v1/credentials', value, headers)[0] == 400, value
             assert request(port, 'POST', '/v1/credentials',
-                           {'scope': 'git:read', 'repository': 'demo', 'lifetime_seconds': 60})[0] == 401
+                           {'scope': 'git:write', 'repository': 'demo', 'lifetime_seconds': 60})[0] == 401
             endpoint = '/v1/repositories'
             assert request(port, 'POST', endpoint, {'name': 'demo'})[0] == 401
             assert request(port, 'POST', endpoint, {'name': 'demo'},
@@ -140,10 +140,10 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             admin_headers = {'Authorization': 'Bearer ' + admin_token.decode()}
             assert request(port, 'POST', endpoint, {'name': 'demo'}, admin_headers)[0] == 201
             git_token, _ = issue_credential(port, headers, 'git:write', 'git-wire')
-            temporary_git, _ = issue_credential(port, headers, 'git:read', 'git-wire', 60)
+            temporary_git, _ = issue_credential(port, headers, 'git:write', 'git-wire', 60)
             assert request(port, 'POST', '/v1/credentials/revoke', {'token': temporary_git.decode()}, admin_headers)[0] == 404
             assert request(port, 'POST', '/v1/credentials/revoke', {'token': temporary_git.decode()}, headers) == (200, b'revoked')
-            git_commit = git_http.check(port, headers, git_token, root, request)
+            git_tag = git_http.check(port, headers, git_token, root, request)
             def identity(_):
                 return request(port, 'GET', '/v1/identity', headers=headers)
             with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
@@ -204,7 +204,7 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
             assert request(port, 'GET', '/v1/identity', headers={'Authorization': 'Bearer ' + restored.decode()}) == (200, b'testuser')
             restored_headers = {'Authorization': 'Bearer ' + restored.decode()}
             status, advertisement = request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack', headers=git_headers('testuser', git_token))
-            assert status == 200 and git_commit + b' refs/heads/main' in advertisement
+            assert status == 200 and git_tag + b' refs/tags/v1.3.0' in advertisement
             assert request(port, 'POST', '/v1/repositories', {'name': 'demo'}, restored_headers)[0] == 409
             assert request(port, 'POST', '/v1/repositories', {'name': 'parallel'}, restored_headers)[0] == 409
             assert request(port, 'POST', '/v1/repositories', {'name': 'after-restart'}, restored_headers)[0] == 201
@@ -236,8 +236,9 @@ with tempfile.TemporaryDirectory(prefix='registry-auth-', dir='/tmp') as tempora
                     pass
                 assert time.monotonic() < deadline, 'unconfigured registry timeout'
                 time.sleep(.05)
-            # Without a configured origin the registry still serves health and refuses to publish.
-            assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-upload-pack')[0] == 200
+            # Without a configured origin the registry still serves health and push discovery.
+            assert request(port, 'GET', '/git/testuser/git-wire/info/refs?service=git-receive-pack',
+                           headers=git_headers('testuser', git_token))[0] == 200
         finally:
             process.terminate()
             try:
