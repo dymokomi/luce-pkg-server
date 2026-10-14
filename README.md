@@ -33,7 +33,7 @@ package index for Luce and Luce Base, written in Luce Base. MIT OR Apache-2.0.
 | `src/objects.lucb` | the content-addressed object files beside the database |
 | `src/migrate.lucb` | `luce-pkg-admin migrate`: objects out of the database, once |
 | `src/site.lucb`, `pages.lucb` | the static site: listings, pages, source browser |
-| `src/admin.lucb` | `luce-pkg-admin`: store token, init, invite, checkpoint, migrate, remove, withdraw, rebuild-site |
+| `src/admin.lucb` | `luce-pkg-admin`: store token, init, invite, checkpoint, migrate, remove, withdraw, trim, rebuild-site |
 | `deploy/` | systemd unit, Caddyfile, host limits, backup and restore, the release bundle builder |
 | `docs/CONTRACTS.md` | the decisions the design rests on |
 

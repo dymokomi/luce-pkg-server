@@ -180,11 +180,49 @@ func withdraw(path: str, coordinate: str, versions: str[]) -> i32!:
     if not online: _ = try database.value().bake(wait_ms = 60000)
     return 0
 
+## Trim packages to their releases (see `repositories.trim`): the refs other than release
+## tags and the objects no release reaches leave the database, and the object files no
+## repository lists any more are deleted. The registry keeps what installs and updates
+## use; history is GitHub's. `--all` trims every package in the site's index
+## (`LUCE_REGISTRY_SITE`). Needs the registry stopped (a database path, not `.sock`).
+func trim(path: str, coordinates: str[]) -> i32!:
+    if strings.ends_with(path, ".sock"): error(auth.invalid, "trim runs with the registry stopped: give the database path")
+    let database = try operate(path)
+    defer database.release()
+    var failed = 0
+    if coordinates.length == 1 and coordinates[0] == "--all":
+        let site = os.env((c.str)"LUCE_REGISTRY_SITE") else error(auth.invalid, "LUCE_REGISTRY_SITE is required")
+        let index = try paths.join(site, "index")
+        defer index.release()
+        let bytes = try files.read((c.str)index.value)
+        defer bytes.release()
+        let lines = try strings.split(strings.trim((str)bytes.value), '\n')
+        defer free(lines)
+        for line in lines:
+            let (coordinate, _) = strings.split_once(line, "\t") else error(auth.invalid, "unreadable site index line")
+            if not try trim_one(database.value(), coordinate): failed += 1
+    else:
+        for coordinate in coordinates:
+            if not try trim_one(database.value(), coordinate): failed += 1
+    _ = try database.value().bake(wait_ms = 60000)
+    return 1 if failed > 0 else 0
+
+## Trim one `owner/name` and say what went; false when it could not be trimmed.
+func trim_one(database: db.Database*, coordinate: str) -> bool!:
+    let (owner, name) = strings.split_once(coordinate, "/") else error(auth.invalid, "name the package as owner/name")
+    if not repositories.valid_name(name) or owner.length == 0: error(auth.invalid, "invalid package name")
+    let trimmed = repositories.trim(database, owner, name) catch failure:
+        print(f"{coordinate}: not trimmed: {failure.message}")
+        return false
+    print(f"{coordinate}: kept {trimmed.releases} release tags and the {trimmed.kept} objects they reach; removed {trimmed.refs} other refs and {trimmed.unlisted} object listings ({trimmed.deleted} files deleted, {trimmed.shared} shared kept)")
+    return true
+
 pub func main(arguments: str[]) -> i32!:
     if arguments.length == 2 and arguments[1] == "token": return try generate_token()
     if arguments.length == 4 and arguments[1] == "rebuild-site": return try rebuild_site(arguments[2], arguments[3])
     if arguments.length >= 5 and arguments[1] == "withdraw": return try withdraw(arguments[2], arguments[3], arguments[4..])
     if arguments.length == 4 and arguments[1] == "migrate": return try migrate(arguments[2], arguments[3])
+    if arguments.length >= 4 and arguments[1] == "trim": return try trim(arguments[2], arguments[3..])
     if arguments.length == 4 and arguments[1] == "remove": return try remove(arguments[2], arguments[3], false)
     if arguments.length == 5 and arguments[1] == "remove" and arguments[4] == "--force": return try remove(arguments[2], arguments[3], true)
     if arguments.length != 3:

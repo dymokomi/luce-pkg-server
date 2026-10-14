@@ -63,8 +63,17 @@ func cases(database: db.Database*) -> !:
     n = try git.encode_tree_entry(git.TreeEntry(mode = "40000", name = "wrongtype", id = blob), payload)
     try put(database, "tree", payload[..<n], wrong)
     try refuse(database, wrong)
+    # A parent the repository does not hold is history, which GitHub keeps: the walk ends
+    # there, so a release pushed without its history publishes (its tree must be whole).
     let parent_text = try strings.format(payload, f"tree {(str)tree_text}\nparent 1111111111111111111111111111111111111111\nauthor A\ncommitter A\n\n")
-    try put(database, "commit", parent_text.bytes, wrong)
+    var snapshot_commit: u8[20]
+    try put(database, "commit", parent_text.bytes, snapshot_commit)
+    try repositories.update_refs(database, "alice", "alice", "graph",
+                                 [repositories.RefUpdate(name = "refs/tags/snapshot", expected = zero, target = snapshot_commit)])
+    var missing_text: u8[40]
+    _ = try git.hex_id(missing, missing_text)
+    let hollow_text = try strings.format(payload, f"tree {(str)missing_text}\nparent 1111111111111111111111111111111111111111\nauthor A\ncommitter A\n\n")
+    try put(database, "commit", hollow_text.bytes, wrong)
     try refuse(database, wrong)
     # Gitlinks intentionally refer to another repository and need no local object.
     n = try git.encode_tree_entry(git.TreeEntry(mode = "160000", name = "submodule", id = missing), payload)
@@ -125,5 +134,5 @@ pub func main(arguments: str[]) -> i32!:
             try cases(client.value())
         else:
             try cases(database.value())
-    print("PASS repository graph closure, types, gitlinks, atomic rejection and reopen")
+    print("PASS repository graph closure, types, gitlinks, history-free releases, atomic rejection and reopen")
     return 0
